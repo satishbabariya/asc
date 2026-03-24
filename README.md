@@ -1,4 +1,4 @@
-# asc-llvm-compiler
+# asc
 
 AssemblyScript compiler built on LLVM, with MLIR as the HIR layer and a
 Rust-inspired ownership model. No garbage collector. All LLVM targets supported.
