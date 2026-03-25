@@ -51,6 +51,7 @@ struct WhereConstraint {
 /// Base class for all declarations.
 class Decl {
 public:
+  virtual ~Decl() = default;
   DeclKind getKind() const { return kind; }
   SourceLocation getLocation() const { return loc; }
   llvm::StringRef getName() const { return name; }

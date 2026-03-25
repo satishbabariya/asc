@@ -1,4 +1,5 @@
 #include "asc/HIR/HIRBuilder.h"
+#include "asc/Basic/SourceManager.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -248,11 +249,13 @@ bool HIRBuilder::isOwnedType(asc::Type *astType) {
 mlir::Value HIRBuilder::emitAlloc(mlir::Type type, mlir::Value init,
                                    mlir::Location location) {
   auto ownType = own::OwnValType::get(&mlirCtx, type);
-  return builder.create<own::OwnAllocOp>(location, ownType, init);
+  auto op = builder.create<own::OwnAllocOp>(location, ownType, init);
+  return op.getResult();
 }
 
 mlir::Value HIRBuilder::emitMove(mlir::Value source, mlir::Location location) {
-  return builder.create<own::OwnMoveOp>(location, source);
+  auto op = builder.create<own::OwnMoveOp>(location, source);
+  return op.getResult();
 }
 
 void HIRBuilder::emitDrop(mlir::Value value, mlir::Location location) {
@@ -261,12 +264,14 @@ void HIRBuilder::emitDrop(mlir::Value value, mlir::Location location) {
 
 mlir::Value HIRBuilder::emitBorrowRef(mlir::Value owned,
                                        mlir::Location location) {
-  return builder.create<own::BorrowRefOp>(location, owned);
+  auto op = builder.create<own::BorrowRefOp>(location, owned);
+  return op.getResult();
 }
 
 mlir::Value HIRBuilder::emitBorrowMut(mlir::Value owned,
                                        mlir::Location location) {
-  return builder.create<own::BorrowMutOp>(location, owned);
+  auto op = builder.create<own::BorrowMutOp>(location, owned);
+  return op.getResult();
 }
 
 // --- Decl visitors ---
@@ -354,7 +359,7 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
       // Wrap in own.alloc for heap-owned non-copy values.
       auto ownType = own::OwnValType::get(&mlirCtx, init.getType(),
                                            ownerInfo.isSend, ownerInfo.isSync);
-      init = builder.create<own::OwnAllocOp>(location, ownType, init);
+      init = builder.create<own::OwnAllocOp>(location, ownType, init).getResult();
     }
     declare(d->getName(), init);
   }

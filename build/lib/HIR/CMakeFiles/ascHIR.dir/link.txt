@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascHIR.a CMakeFiles/ascHIR.dir/OwnDialect.cpp.o CMakeFiles/ascHIR.dir/OwnOps.cpp.o CMakeFiles/ascHIR.dir/OwnTypes.cpp.o CMakeFiles/ascHIR.dir/TaskDialect.cpp.o CMakeFiles/ascHIR.dir/TaskOps.cpp.o CMakeFiles/ascHIR.dir/HIRBuilder.cpp.o
+/usr/bin/ranlib -D libascHIR.a

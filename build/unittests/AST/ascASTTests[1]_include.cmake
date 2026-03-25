@@ -1,0 +1,5 @@
+if(EXISTS "/home/user/asc/build/unittests/AST/ascASTTests[1]_tests.cmake")
+  include("/home/user/asc/build/unittests/AST/ascASTTests[1]_tests.cmake")
+else()
+  add_test(ascASTTests_NOT_BUILT ascASTTests_NOT_BUILT)
+endif()

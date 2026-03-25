@@ -27,6 +27,7 @@ enum class StmtKind {
 /// Base class for all statements.
 class Stmt {
 public:
+  virtual ~Stmt() = default;
   StmtKind getKind() const { return kind; }
   SourceLocation getLocation() const { return loc; }
 

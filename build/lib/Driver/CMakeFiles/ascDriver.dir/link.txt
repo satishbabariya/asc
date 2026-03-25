@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascDriver.a CMakeFiles/ascDriver.dir/Driver.cpp.o
+/usr/bin/ranlib -D libascDriver.a

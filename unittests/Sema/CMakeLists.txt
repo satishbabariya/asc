@@ -5,6 +5,8 @@ add_executable(ascSemaTests
 target_link_libraries(ascSemaTests
   PRIVATE
   ascSema
+  ascParse
+  ascLex
   ascAST
   ascBasic
   gtest

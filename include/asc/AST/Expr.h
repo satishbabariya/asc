@@ -57,6 +57,7 @@ enum class ExprKind {
 /// Base class for all expressions.
 class Expr {
 public:
+  virtual ~Expr() = default;
   ExprKind getKind() const { return kind; }
   SourceLocation getLocation() const { return loc; }
 
@@ -740,6 +741,7 @@ enum class PatternKind {
 
 class Pattern {
 public:
+  virtual ~Pattern() = default;
   PatternKind getKind() const { return kind; }
   SourceLocation getLocation() const { return loc; }
 

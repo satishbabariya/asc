@@ -185,10 +185,10 @@ void AliasCheckPass::checkNoMoveWhileBorrowed(mlir::func::FuncOp func) {
           // The borrow is used after the move/drop.
           // E003: move/drop while borrowed
           llvm::StringRef verb = (opName == "own.move") ? "move" : "drop";
-          op->emitError() << "[E003] cannot " << verb
-                          << " value while it is borrowed";
-          borrow.borrowOp->emitNote() << "borrow created here";
-          useOp->emitNote() << "borrowed value used here";
+          auto diag = op->emitError() << "[E003] cannot " << verb
+                                      << " value while it is borrowed";
+          diag.attachNote(borrow.borrowOp->getLoc()) << "borrow created here";
+          diag.attachNote(useOp->getLoc()) << "borrowed value used here";
           signalPassFailure();
           return;
         }

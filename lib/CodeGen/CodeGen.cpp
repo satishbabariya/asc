@@ -91,7 +91,7 @@ bool CodeGenerator::runMLIRLowering(mlir::ModuleOp module) {
   mlir::PassManager pm(module.getContext());
 
   // Custom lowering passes.
-  pm.addPass(std::make_unique<OwnershipLoweringPass>());
+  pm.addPass(createOwnershipLoweringPass());
   pm.addPass(createConcurrencyLoweringPass(llvm::Triple(opts.targetTriple)));
 
   // Standard MLIR-to-LLVM lowering.

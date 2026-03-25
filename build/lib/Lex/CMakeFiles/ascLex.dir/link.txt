@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascLex.a CMakeFiles/ascLex.dir/Lexer.cpp.o
+/usr/bin/ranlib -D libascLex.a

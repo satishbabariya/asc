@@ -1,0 +1,5 @@
+if(EXISTS "/home/user/asc/build/unittests/Lex/ascLexTests[1]_tests.cmake")
+  include("/home/user/asc/build/unittests/Lex/ascLexTests[1]_tests.cmake")
+else()
+  add_test(ascLexTests_NOT_BUILT ascLexTests_NOT_BUILT)
+endif()

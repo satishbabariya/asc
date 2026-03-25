@@ -366,7 +366,7 @@ restart:
     diags.emitError(startLoc, DiagID::ErrUnexpectedToken,
                     std::string("unexpected character '") + c + "'");
     result = Token(tok::unknown, startLoc,
-                   llvm::StringRef(&buffer[curOffset - 1], 1));
+                   buffer.substr(curOffset - 1, 1));
     return;
   }
 }

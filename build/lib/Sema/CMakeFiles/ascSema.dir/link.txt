@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascSema.a CMakeFiles/ascSema.dir/Sema.cpp.o CMakeFiles/ascSema.dir/SemaDecl.cpp.o CMakeFiles/ascSema.dir/SemaExpr.cpp.o CMakeFiles/ascSema.dir/SemaType.cpp.o CMakeFiles/ascSema.dir/Builtins.cpp.o
+/usr/bin/ranlib -D libascSema.a

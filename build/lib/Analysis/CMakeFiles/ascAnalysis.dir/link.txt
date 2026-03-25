@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascAnalysis.a CMakeFiles/ascAnalysis.dir/LivenessAnalysis.cpp.o CMakeFiles/ascAnalysis.dir/RegionInference.cpp.o CMakeFiles/ascAnalysis.dir/AliasCheck.cpp.o CMakeFiles/ascAnalysis.dir/MoveCheck.cpp.o CMakeFiles/ascAnalysis.dir/SendSyncCheck.cpp.o CMakeFiles/ascAnalysis.dir/DropInsertion.cpp.o CMakeFiles/ascAnalysis.dir/PanicScopeWrap.cpp.o
+/usr/bin/ranlib -D libascAnalysis.a

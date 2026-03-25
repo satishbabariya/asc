@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascParse.a CMakeFiles/ascParse.dir/Parser.cpp.o CMakeFiles/ascParse.dir/ParseDecl.cpp.o CMakeFiles/ascParse.dir/ParseStmt.cpp.o CMakeFiles/ascParse.dir/ParseExpr.cpp.o
+/usr/bin/ranlib -D libascParse.a

@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascCodeGen.a CMakeFiles/ascCodeGen.dir/OwnershipLowering.cpp.o CMakeFiles/ascCodeGen.dir/ConcurrencyLowering.cpp.o CMakeFiles/ascCodeGen.dir/CodeGen.cpp.o
+/usr/bin/ranlib -D libascCodeGen.a

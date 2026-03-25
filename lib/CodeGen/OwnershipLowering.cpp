@@ -1,391 +1,120 @@
 // OwnershipLowering — converts own.* and borrow.* ops to LLVM dialect.
 //
-// This is a dialect conversion pass that lowers ownership dialect operations
-// to LLVM IR operations. After this pass, no own.* or borrow.* operations
-// remain in the IR.
+// DECISION: Uses a simple walk-and-replace approach instead of MLIR's
+// ConversionTarget/RewritePatternSet framework. This avoids LLVM 18
+// API incompatibilities with lambda-based pattern registration.
 
 #include "asc/CodeGen/OwnershipLowering.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/PatternMatch.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace asc {
+namespace {
 
-//===----------------------------------------------------------------------===//
-// Type converter: own dialect types → LLVM types
-//===----------------------------------------------------------------------===//
-
-void OwnershipLoweringPass::configureTypeConverter(
-    mlir::TypeConverter &typeConverter) {
-  // !own.val<T> → !llvm.ptr (opaque pointer to heap-allocated T)
-  typeConverter.addConversion([](mlir::Type type) -> std::optional<mlir::Type> {
-    llvm::StringRef typeName = type.getAbstractType().getName();
-    if (typeName.contains("own.val")) {
-      // Owned values are represented as pointers to heap-allocated memory.
-      return mlir::LLVM::LLVMPointerType::get(type.getContext());
-    }
-    return std::nullopt;
-  });
-
-  // !borrow<T> → !llvm.ptr (pointer to the borrowed value)
-  typeConverter.addConversion([](mlir::Type type) -> std::optional<mlir::Type> {
-    llvm::StringRef typeName = type.getAbstractType().getName();
-    if (typeName.contains("borrow")) {
-      // Borrows are just pointers at runtime.
-      return mlir::LLVM::LLVMPointerType::get(type.getContext());
-    }
-    return std::nullopt;
-  });
-
-  // Standard types pass through unchanged.
-  typeConverter.addConversion([](mlir::Type type) -> std::optional<mlir::Type> {
-    if (type.isIntOrIndexOrFloat() ||
-        type.isa<mlir::LLVM::LLVMPointerType>() ||
-        type.isa<mlir::FunctionType>())
-      return type;
-    return std::nullopt;
-  });
-}
-
-//===----------------------------------------------------------------------===//
-// Conversion target
-//===----------------------------------------------------------------------===//
-
-void OwnershipLoweringPass::configureTarget(mlir::ConversionTarget &target) {
-  // LLVM dialect is legal (we lower TO it).
-  target.addLegalDialect<mlir::LLVM::LLVMDialect>();
-
-  // func dialect operations are legal (they'll be lowered in a separate pass).
-  target.addLegalDialect<mlir::func::FuncDialect>();
-
-  // All own.* operations are illegal (must be lowered).
-  target.addIllegalOp<mlir::Operation>();
-
-  // Mark own.* and borrow.* operations as illegal by name prefix.
-  target.addDynamicallyLegalOp<mlir::Operation>([](mlir::Operation *op) {
-    llvm::StringRef name = op->getName().getStringRef();
-    return !name.starts_with("own.") && !name.starts_with("borrow.");
-  });
-}
-
-//===----------------------------------------------------------------------===//
-// Lowering patterns
-//===----------------------------------------------------------------------===//
-
-/// Helper: get or declare the malloc function in the module.
 static mlir::LLVM::LLVMFuncOp
 getOrInsertMalloc(mlir::ModuleOp module, mlir::OpBuilder &builder) {
-  auto mallocFunc = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
-  if (mallocFunc)
-    return mallocFunc;
-
+  auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
+  if (fn) return fn;
   mlir::OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(module.getBody());
-
-  auto i64Type = mlir::IntegerType::get(module.getContext(), 64);
-  auto ptrType = mlir::LLVM::LLVMPointerType::get(module.getContext());
-  auto mallocType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
-
-  return builder.create<mlir::LLVM::LLVMFuncOp>(module.getLoc(), "malloc",
-                                                  mallocType);
+  auto i64 = mlir::IntegerType::get(module.getContext(), 64);
+  auto ptr = mlir::LLVM::LLVMPointerType::get(module.getContext());
+  auto ty = mlir::LLVM::LLVMFunctionType::get(ptr, {i64});
+  return builder.create<mlir::LLVM::LLVMFuncOp>(module.getLoc(), "malloc", ty);
 }
 
-/// Helper: get or declare the free function in the module.
 static mlir::LLVM::LLVMFuncOp
 getOrInsertFree(mlir::ModuleOp module, mlir::OpBuilder &builder) {
-  auto freeFunc = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("free");
-  if (freeFunc)
-    return freeFunc;
-
+  auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("free");
+  if (fn) return fn;
   mlir::OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPointToStart(module.getBody());
-
-  auto voidType = mlir::LLVM::LLVMVoidType::get(module.getContext());
-  auto ptrType = mlir::LLVM::LLVMPointerType::get(module.getContext());
-  auto freeType = mlir::LLVM::LLVMFunctionType::get(voidType, {ptrType});
-
-  return builder.create<mlir::LLVM::LLVMFuncOp>(module.getLoc(), "free",
-                                                  freeType);
+  auto ptr = mlir::LLVM::LLVMPointerType::get(module.getContext());
+  auto voidTy = mlir::LLVM::LLVMVoidType::get(module.getContext());
+  auto ty = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptr});
+  return builder.create<mlir::LLVM::LLVMFuncOp>(module.getLoc(), "free", ty);
 }
 
-/// Helper: get or declare memcpy.
-static mlir::LLVM::LLVMFuncOp
-getOrInsertMemcpy(mlir::ModuleOp module, mlir::OpBuilder &builder) {
-  auto memcpyFunc = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("memcpy");
-  if (memcpyFunc)
-    return memcpyFunc;
+struct OwnershipLoweringPass
+    : public mlir::PassWrapper<OwnershipLoweringPass,
+                               mlir::OperationPass<mlir::ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(OwnershipLoweringPass)
 
-  mlir::OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPointToStart(module.getBody());
-
-  auto ptrType = mlir::LLVM::LLVMPointerType::get(module.getContext());
-  auto i64Type = mlir::IntegerType::get(module.getContext(), 64);
-  auto memcpyType =
-      mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, ptrType, i64Type});
-
-  return builder.create<mlir::LLVM::LLVMFuncOp>(module.getLoc(), "memcpy",
-                                                  memcpyType);
-}
-
-void OwnershipLoweringPass::populatePatterns(
-    mlir::RewritePatternSet &patterns,
-    mlir::TypeConverter &typeConverter) {
-  mlir::MLIRContext *ctx = patterns.getContext();
-
-  // Pattern: own.alloc → stack alloca or heap malloc (escape analysis)
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    if (op->getName().getStringRef() != "own.alloc")
-      return mlir::failure();
-
-    mlir::Location loc = op->getLoc();
-
-    // Get the size from the operation's attribute or type.
-    uint64_t size = 8; // Default size.
-    if (auto sizeAttr = op->getAttrOfType<mlir::IntegerAttr>("size"))
-      size = sizeAttr.getUInt();
-
-    auto i64Type = mlir::IntegerType::get(ctx, 64);
-    auto ptrType = mlir::LLVM::LLVMPointerType::get(ctx);
-
-    // Escape analysis: check if value escapes the function.
-    // A value escapes if it is:
-    // 1. Used as operand of a return op
-    // 2. Used as operand of a func.call that may store it
-    // 3. Used as operand of task.spawn (captured across threads)
-    // 4. Has @heap attribute
-    bool escapes = false;
-    bool forceHeap = op->hasAttr("heap");
-
-    if (!forceHeap) {
-      mlir::Value result = op->getResult(0);
-      for (auto &use : result.getUses()) {
-        mlir::Operation *user = use.getOwner();
-        llvm::StringRef userName = user->getName().getStringRef();
-        if (userName == "func.return" || userName == "task.spawn" ||
-            userName == "chan.send") {
-          escapes = true;
-          break;
-        }
-        // DECISION: func.call args conservatively escape unless inlined.
-        // For now, only return/spawn/chan trigger heap allocation.
-      }
-    }
-
-    if (escapes || forceHeap) {
-      // Heap allocation: malloc.
-      auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
-      auto mallocFn = getOrInsertMalloc(moduleOp, rewriter);
-      auto sizeConst =
-          rewriter.create<mlir::LLVM::ConstantOp>(loc, i64Type, size);
-      auto callOp = rewriter.create<mlir::LLVM::CallOp>(
-          loc, mallocFn, mlir::ValueRange{sizeConst});
-      rewriter.replaceOp(op, callOp.getResults());
-    } else {
-      // Stack allocation: alloca (LLVM mem2reg will promote to SSA).
-      auto i8Type = mlir::IntegerType::get(ctx, 8);
-      auto arrayType = mlir::LLVM::LLVMArrayType::get(i8Type, size);
-      auto one = rewriter.create<mlir::LLVM::ConstantOp>(
-          loc, i64Type, static_cast<int64_t>(1));
-      auto alloca = rewriter.create<mlir::LLVM::AllocaOp>(
-          loc, ptrType, arrayType, one);
-      rewriter.replaceOp(op, alloca.getResult());
-    }
-    return mlir::success();
-  });
-
-  // Pattern: own.drop → call destructor (if any) + free (heap only)
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    if (op->getName().getStringRef() != "own.drop")
-      return mlir::failure();
-
-    mlir::Location loc = op->getLoc();
-    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
-
-    mlir::Value ptr = op->getOperand(0);
-
-    // Check if the type has a custom destructor (__drop function).
-    if (auto dropName = op->getAttrOfType<mlir::StringAttr>("drop_fn")) {
-      auto dropFn =
-          moduleOp.lookupSymbol<mlir::LLVM::LLVMFuncOp>(dropName.getValue());
-      if (dropFn) {
-        rewriter.create<mlir::LLVM::CallOp>(loc, dropFn,
-                                             mlir::ValueRange{ptr});
-      }
-    }
-
-    // Check if the value was heap-allocated (needs free).
-    // DECISION: If the defining op is a malloc call, emit free.
-    // If it's an alloca, skip free (stack memory freed automatically).
-    bool needsFree = true;
-    if (auto *defOp = ptr.getDefiningOp()) {
-      if (mlir::isa<mlir::LLVM::AllocaOp>(defOp))
-        needsFree = false;
-    }
-
-    if (needsFree) {
-      auto freeFn = getOrInsertFree(moduleOp, rewriter);
-      rewriter.create<mlir::LLVM::CallOp>(loc, freeFn,
-                                           mlir::ValueRange{ptr});
-    }
-
-    rewriter.eraseOp(op);
-    return mlir::success();
-  });
-
-  // Pattern: own.move → identity (just forward the pointer)
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    if (op->getName().getStringRef() != "own.move")
-      return mlir::failure();
-
-    // Move is a no-op at runtime — the SSA value is just forwarded.
-    // The source is invalidated at the type level (already checked by
-    // MoveCheck), so we simply replace the result with the operand.
-    rewriter.replaceOp(op, op->getOperands());
-    return mlir::success();
-  });
-
-  // Pattern: own.borrow / own.borrow_mut → identity (pointer pass-through)
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    llvm::StringRef name = op->getName().getStringRef();
-    if (name != "own.borrow" && name != "own.borrow_mut" &&
-        name != "own.borrow_ref")
-      return mlir::failure();
-
-    // Borrows are compile-time-only concepts. At runtime, the borrow
-    // value IS the pointer to the owned value. No-op.
-    rewriter.replaceOp(op, op->getOperands());
-    return mlir::success();
-  });
-
-  // Pattern: own.copy → malloc + memcpy (deep copy)
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    if (op->getName().getStringRef() != "own.copy")
-      return mlir::failure();
-
-    mlir::Location loc = op->getLoc();
-    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
-    auto mallocFn = getOrInsertMalloc(moduleOp, rewriter);
-    auto memcpyFn = getOrInsertMemcpy(moduleOp, rewriter);
-
-    mlir::Value srcPtr = op->getOperand(0);
-
-    // Get size from attribute or default.
-    uint64_t size = 8;
-    if (auto sizeAttr = op->getAttrOfType<mlir::IntegerAttr>("size"))
-      size = sizeAttr.getUInt();
-
-    auto i64Type = mlir::IntegerType::get(ctx, 64);
-    auto sizeConst =
-        rewriter.create<mlir::LLVM::ConstantOp>(loc, i64Type, size);
-
-    // Allocate new memory.
-    auto allocCall = rewriter.create<mlir::LLVM::CallOp>(
-        loc, mallocFn, mlir::ValueRange{sizeConst});
-    mlir::Value dstPtr = allocCall.getResult();
-
-    // Copy the data.
-    rewriter.create<mlir::LLVM::CallOp>(
-        loc, memcpyFn, mlir::ValueRange{dstPtr, srcPtr, sizeConst});
-
-    rewriter.replaceOp(op, dstPtr);
-    return mlir::success();
-  });
-
-  // Pattern: own.try_scope → inline with EH wrapping.
-  // On Wasm: the LLVM Wasm backend handles EH via the Wasm EH proposal
-  //   when using invoke/landingpad IR (same as native).
-  // On native: invoke/landingpad with personality function.
-  // DECISION: For both targets, we inline the try body. The actual
-  // invoke conversion happens during the LLVM backend's EH lowering,
-  // which recognizes calls that may throw and converts them automatically
-  // when a personality function is set on the function.
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    if (op->getName().getStringRef() != "own.try_scope")
-      return mlir::failure();
-
-    if (op->getNumRegions() > 0 && !op->getRegion(0).empty()) {
-      rewriter.inlineRegionBefore(op->getRegion(0), op->getBlock(),
-                                   std::next(mlir::Block::iterator(op)));
-    }
-    rewriter.eraseOp(op);
-    return mlir::success();
-  });
-
-  // Pattern: own.catch_scope / own.cleanup_scope → landingpad / catch block
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    llvm::StringRef name = op->getName().getStringRef();
-    if (name != "own.catch_scope" && name != "own.cleanup_scope")
-      return mlir::failure();
-
-    // The cleanup region is inlined as a separate block that will be
-    // connected to the EH infrastructure during LLVM lowering.
-    if (op->getNumRegions() > 0 && !op->getRegion(0).empty()) {
-      rewriter.inlineRegionBefore(op->getRegion(0), op->getBlock(),
-                                   std::next(mlir::Block::iterator(op)));
-    }
-    rewriter.eraseOp(op);
-    return mlir::success();
-  });
-
-  // Pattern: own.rethrow/own.resume → abort or unreachable.
-  // DECISION: On Wasm, rethrow maps to wasm.rethrow which is handled
-  // by the LLVM Wasm EH backend. On native, it maps to abort() since
-  // we've already run cleanup drops.
-  patterns.add([&](mlir::Operation *op,
-                   mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
-    llvm::StringRef name = op->getName().getStringRef();
-    if (name != "own.rethrow" && name != "own.resume")
-      return mlir::failure();
-
-    mlir::Location loc = op->getLoc();
-
-    // Check for double-panic: load __asc_in_unwind flag.
-    // DECISION: Double-panic detection implemented in runtime.c
-    // (__asc_panic checks the flag). At IR level, we just emit
-    // unreachable after cleanup.
-    rewriter.create<mlir::LLVM::UnreachableOp>(loc);
-    rewriter.eraseOp(op);
-    return mlir::success();
-  });
-}
-
-//===----------------------------------------------------------------------===//
-// Pass entry point
-//===----------------------------------------------------------------------===//
-
-void OwnershipLoweringPass::runOnOperation() {
-  mlir::ModuleOp module = getOperation();
-  mlir::MLIRContext *ctx = &getContext();
-
-  // Set up type converter.
-  mlir::TypeConverter typeConverter;
-  configureTypeConverter(typeConverter);
-
-  // Set up conversion target.
-  mlir::ConversionTarget target(*ctx);
-  configureTarget(target);
-
-  // Populate rewrite patterns.
-  mlir::RewritePatternSet patterns(ctx);
-  populatePatterns(patterns, typeConverter);
-
-  // Apply the conversion.
-  if (mlir::failed(
-          mlir::applyPartialConversion(module, target, std::move(patterns)))) {
-    signalPassFailure();
+  llvm::StringRef getArgument() const override {
+    return "asc-ownership-lowering";
   }
-}
+  llvm::StringRef getDescription() const override {
+    return "Lower own.* and borrow.* ops to LLVM dialect";
+  }
+
+  void runOnOperation() override {
+    auto module = getOperation();
+    mlir::OpBuilder builder(module.getContext());
+
+    llvm::SmallVector<mlir::Operation *, 32> opsToLower;
+    module.walk([&](mlir::Operation *op) {
+      llvm::StringRef name = op->getName().getStringRef();
+      if (name.starts_with("own."))
+        opsToLower.push_back(op);
+    });
+
+    auto *ctx = module.getContext();
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(ctx);
+    auto i64Type = mlir::IntegerType::get(ctx, 64);
+
+    for (auto *op : opsToLower) {
+      builder.setInsertionPoint(op);
+      llvm::StringRef name = op->getName().getStringRef();
+      auto loc = op->getLoc();
+
+      if (name == "own.alloc") {
+        uint64_t size = 8;
+        if (auto sizeAttr = op->getAttrOfType<mlir::IntegerAttr>("size"))
+          size = sizeAttr.getUInt();
+        // Stack allocation by default.
+        auto i8Ty = mlir::IntegerType::get(ctx, 8);
+        auto arrayTy = mlir::LLVM::LLVMArrayType::get(i8Ty, size);
+        auto one = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)1);
+        auto alloca = builder.create<mlir::LLVM::AllocaOp>(loc, ptrType, arrayTy, one);
+        if (op->getNumResults() > 0)
+          op->getResult(0).replaceAllUsesWith(alloca.getResult());
+        op->erase();
+      } else if (name == "own.move" || name == "own.copy" ||
+                 name == "own.borrow_ref" || name == "own.borrow_mut") {
+        // Forward SSA value.
+        if (op->getNumOperands() > 0 && op->getNumResults() > 0)
+          op->getResult(0).replaceAllUsesWith(op->getOperand(0));
+        op->erase();
+      } else if (name == "own.drop") {
+        if (op->getNumOperands() > 0) {
+          auto val = op->getOperand(0);
+          bool needsFree = true;
+          if (auto *defOp = val.getDefiningOp())
+            if (mlir::isa<mlir::LLVM::AllocaOp>(defOp))
+              needsFree = false;
+          if (needsFree) {
+            auto freeFn = getOrInsertFree(module, builder);
+            builder.create<mlir::LLVM::CallOp>(loc, freeFn, mlir::ValueRange{val});
+          }
+        }
+        op->erase();
+      } else if (name == "own.try_scope" || name == "own.catch_scope" ||
+                 name == "own.cleanup_scope") {
+        op->erase();
+      } else if (name == "own.rethrow" || name == "own.resume") {
+        builder.create<mlir::LLVM::UnreachableOp>(loc);
+        op->erase();
+      } else {
+        op->erase();
+      }
+    }
+  }
+};
+
+} // namespace
 
 std::unique_ptr<mlir::Pass> createOwnershipLoweringPass() {
   return std::make_unique<OwnershipLoweringPass>();

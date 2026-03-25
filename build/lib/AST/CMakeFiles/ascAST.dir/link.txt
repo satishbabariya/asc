@@ -1,0 +1,2 @@
+/usr/bin/ar Dqc libascAST.a CMakeFiles/ascAST.dir/ASTContext.cpp.o CMakeFiles/ascAST.dir/Type.cpp.o
+/usr/bin/ranlib -D libascAST.a

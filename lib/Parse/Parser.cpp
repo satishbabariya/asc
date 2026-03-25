@@ -1,4 +1,5 @@
 #include "asc/Parse/Parser.h"
+#include "llvm/ADT/StringSwitch.h"
 
 namespace asc {
 

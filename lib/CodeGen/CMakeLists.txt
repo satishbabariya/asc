@@ -12,8 +12,14 @@ target_link_libraries(ascCodeGen
   MLIRIR
   MLIRLLVMDialect
   MLIRLLVMCommonConversion
-  MLIRToLLVMIR
+  MLIRTargetLLVMIRExport
+  MLIRToLLVMIRTranslationRegistration
+  MLIRLLVMToLLVMIRTranslation
   MLIRPass
+  MLIRFuncToLLVM
+  MLIRArithToLLVM
+  MLIRSCFToControlFlow
+  MLIRControlFlowToLLVM
   LLVMCore
   LLVMSupport
   LLVMTarget

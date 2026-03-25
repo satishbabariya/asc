@@ -42,6 +42,7 @@ class ASTContext;
 /// Base class for all types in the AST.
 class Type {
 public:
+  virtual ~Type() = default;
   TypeKind getKind() const { return kind; }
   SourceLocation getLocation() const { return loc; }
 
