@@ -8,6 +8,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/All.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -104,7 +105,10 @@ bool CodeGenerator::runMLIRLowering(mlir::ModuleOp module) {
 }
 
 bool CodeGenerator::translateToLLVMIR(mlir::ModuleOp module) {
-  mlir::registerLLVMDialectTranslation(*module.getContext());
+  // Register ALL dialect-to-LLVM-IR translations (func, arith, cf, llvm, etc.)
+  mlir::DialectRegistry registry;
+  mlir::registerAllToLLVMIRTranslations(registry);
+  module.getContext()->appendDialectRegistry(registry);
 
   llvmModule = mlir::translateModuleToLLVMIR(module, llvmContext);
   if (!llvmModule) {

@@ -15,6 +15,7 @@ target_link_libraries(ascCodeGen
   MLIRTargetLLVMIRExport
   MLIRToLLVMIRTranslationRegistration
   MLIRLLVMToLLVMIRTranslation
+  MLIRBuiltinToLLVMIRTranslation
   MLIRPass
   MLIRFuncToLLVM
   MLIRArithToLLVM

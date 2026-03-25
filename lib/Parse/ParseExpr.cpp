@@ -466,14 +466,17 @@ Expr *Parser::parsePrimaryExpr() {
       // DECISION: Struct literal only when identifier is followed by {
       // and the first thing inside is `identifier:` or `..`.
       // Peek to disambiguate from block expression.
-      const Token &next = lexer.peek();
+      // Disambiguate struct literal from block expression.
+      // Current token is {. Peek inside: if we see `identifier` or `..` or `}`,
+      // it's a struct literal. Block expressions starting with identifier are
+      // handled by falling through to block parsing.
+      const Token &firstInBrace = lexer.peek();
       bool isStructLit = false;
-      if (next.is(tok::colon) || next.is(tok::comma) ||
-          next.is(tok::r_brace) || next.is(tok::dotdot)) {
-        // Actually we already consumed the identifier, peek inside {
-        // Look at first token after {
-        // The current tok is {. After { we'd see either `ident :` or `..`
-        // Heuristic: if first thing in braces is identifier, it's struct lit.
+      if (firstInBrace.is(tok::r_brace) || firstInBrace.is(tok::dotdot)) {
+        isStructLit = true;
+      } else if (firstInBrace.is(tok::identifier)) {
+        // DECISION: If first token inside { is an identifier, treat as
+        // struct literal. This is correct for `Point { x: 1, y: 2 }`.
         isStructLit = true;
       }
 
