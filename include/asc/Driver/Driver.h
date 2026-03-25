@@ -74,6 +74,12 @@ private:
   /// Run the `fmt` subcommand: format source file.
   ExitCode runFmt();
 
+  /// Run the `doc` subcommand: extract documentation.
+  ExitCode runDoc();
+
+  /// Run the `lsp` subcommand: start LSP server.
+  ExitCode runLsp();
+
   /// Stage 1: Load source file.
   ExitCode loadSource();
 

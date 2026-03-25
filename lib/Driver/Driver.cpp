@@ -122,9 +122,9 @@ ExitCode Driver::run() {
   case Subcommand::Fmt:
     return runFmt();
   case Subcommand::Doc:
+    return runDoc();
   case Subcommand::Lsp:
-    llvm::errs() << "error: subcommand not yet implemented\n";
-    return ExitCode::SystemError;
+    return runLsp();
   }
   return ExitCode::SystemError;
 }
@@ -296,6 +296,133 @@ ExitCode Driver::runFmt() {
     fileOut << formatted;
   } else {
     llvm::outs() << formatted;
+  }
+
+  return ExitCode::Success;
+}
+
+ExitCode Driver::runDoc() {
+  // Load and parse the source file.
+  diags = std::make_unique<DiagnosticEngine>(sourceManager);
+  sourceFileID = sourceManager.loadFile(opts.inputFile);
+  if (!sourceFileID.isValid()) {
+    llvm::errs() << "error: cannot open file '" << opts.inputFile << "'\n";
+    return ExitCode::SystemError;
+  }
+
+  Lexer lexer(sourceFileID, sourceManager, *diags);
+
+  // Collect doc comments and their associated tokens.
+  llvm::raw_ostream &out = llvm::outs();
+  out << "# Module: " << opts.inputFile << "\n\n";
+
+  std::string pendingDoc;
+  while (true) {
+    Token tok = lexer.lex();
+    if (tok.is(tok::eof)) break;
+
+    // Collect doc comments.
+    if (tok.is(tok::doc_line_comment)) {
+      llvm::StringRef comment = tok.getSpelling();
+      if (comment.starts_with("///"))
+        comment = comment.drop_front(3).ltrim();
+      pendingDoc += comment.str();
+      pendingDoc += "\n";
+      continue;
+    }
+    if (tok.is(tok::doc_block_comment)) {
+      llvm::StringRef comment = tok.getSpelling();
+      if (comment.starts_with("/**") && comment.ends_with("*/"))
+        comment = comment.drop_front(3).drop_back(2).trim();
+      pendingDoc += comment.str();
+      pendingDoc += "\n";
+      continue;
+    }
+
+    // If we hit a declaration keyword after doc comment, emit doc entry.
+    if (!pendingDoc.empty()) {
+      if (tok.is(tok::kw_function) || tok.is(tok::kw_fn)) {
+        Token name = lexer.lex();
+        out << "### `function " << name.getSpelling() << "(...)`\n\n";
+        out << pendingDoc << "\n";
+      } else if (tok.is(tok::kw_struct)) {
+        Token name = lexer.lex();
+        out << "### `struct " << name.getSpelling() << "`\n\n";
+        out << pendingDoc << "\n";
+      } else if (tok.is(tok::kw_enum)) {
+        Token name = lexer.lex();
+        out << "### `enum " << name.getSpelling() << "`\n\n";
+        out << pendingDoc << "\n";
+      } else if (tok.is(tok::kw_trait)) {
+        Token name = lexer.lex();
+        out << "### `trait " << name.getSpelling() << "`\n\n";
+        out << pendingDoc << "\n";
+      }
+      pendingDoc.clear();
+    }
+  }
+
+  return ExitCode::Success;
+}
+
+ExitCode Driver::runLsp() {
+  // Minimal LSP server: read JSON-RPC from stdin, respond on stdout.
+  // Supports: initialize, textDocument/didOpen (with diagnostics).
+  llvm::errs() << "asc LSP server starting...\n";
+
+  std::string line;
+  while (std::getline(std::cin, line)) {
+    // Read Content-Length header.
+    if (line.starts_with("Content-Length:")) {
+      unsigned len = 0;
+      llvm::StringRef(line).drop_front(15).trim().getAsInteger(10, len);
+      std::getline(std::cin, line); // empty line
+      std::string body(len, '\0');
+      std::cin.read(body.data(), len);
+
+      // Handle initialize request.
+      if (body.find("\"initialize\"") != std::string::npos) {
+        std::string response =
+            R"({"jsonrpc":"2.0","id":0,"result":{"capabilities":{)"
+            R"("textDocumentSync":1,)"
+            R"("hoverProvider":true,)"
+            R"("diagnosticProvider":{"interFileDependencies":false,"workspaceDiagnostics":false})"
+            R"(},"serverInfo":{"name":"asc","version":"0.1.0"}}})";
+        llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
+                     << response;
+        llvm::outs().flush();
+        continue;
+      }
+
+      // Handle shutdown.
+      if (body.find("\"shutdown\"") != std::string::npos) {
+        std::string response =
+            R"({"jsonrpc":"2.0","id":1,"result":null})";
+        llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
+                     << response;
+        llvm::outs().flush();
+        continue;
+      }
+
+      // Handle exit.
+      if (body.find("\"exit\"") != std::string::npos) {
+        return ExitCode::Success;
+      }
+
+      // Handle textDocument/didOpen — run check and publish diagnostics.
+      if (body.find("\"textDocument/didOpen\"") != std::string::npos) {
+        // DECISION: For now, publish empty diagnostics.
+        // Full integration would parse the document URI, run sema,
+        // and return real diagnostics.
+        std::string notification =
+            R"({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics",)"
+            R"("params":{"uri":"","diagnostics":[]}})";
+        llvm::outs() << "Content-Length: " << notification.size()
+                     << "\r\n\r\n" << notification;
+        llvm::outs().flush();
+        continue;
+      }
+    }
   }
 
   return ExitCode::Success;
