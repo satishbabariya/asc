@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `rfcs/RFC-*.md` — Design RFCs (accepted, authoritative)
 - `rfcs/decisions/` — Recorded design decisions with rationale
 - `README.md` — Project overview and quick links
-- Planned implementation will use Rust crates in `crates/` (asc-lexer, asc-parser, asc-sema, asc-hir, asc-codegen, asc)
+- Planned implementation in C++ using LLVM/MLIR libraries directly, organized in `lib/` and `include/` (Lexer, Parser, AST, Sema, HIR, CodeGen)
 
 ## Architecture
 
