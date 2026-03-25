@@ -131,30 +131,34 @@ ExitCode Driver::runBuild() {
   ExitCode ec;
 
   auto start = std::chrono::steady_clock::now();
+  auto stageStart = start;
+
+  auto reportStage = [&](const char *name) {
+    if (!opts.verbose) return;
+    auto now = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::microseconds>(
+        now - stageStart);
+    llvm::errs() << "  [" << name << "] " << (ms.count() / 1000.0) << "ms\n";
+    stageStart = now;
+  };
 
   if ((ec = loadSource()) != ExitCode::Success) return ec;
-  if (opts.verbose)
-    llvm::errs() << "  [1/7] loaded source\n";
+  reportStage("load");
 
   if ((ec = parseSource()) != ExitCode::Success) return ec;
-  if (opts.verbose)
-    llvm::errs() << "  [2/7] parsed\n";
+  reportStage("parse");
 
   if ((ec = runSema()) != ExitCode::Success) return ec;
-  if (opts.verbose)
-    llvm::errs() << "  [3/7] semantic analysis\n";
+  reportStage("sema");
 
   if ((ec = lowerToHIR()) != ExitCode::Success) return ec;
-  if (opts.verbose)
-    llvm::errs() << "  [4/7] HIR generated\n";
+  reportStage("hir");
 
   if ((ec = runAnalysis()) != ExitCode::Success) return ec;
-  if (opts.verbose)
-    llvm::errs() << "  [5/7] borrow check passed\n";
+  reportStage("check");
 
   if ((ec = runTransforms()) != ExitCode::Success) return ec;
-  if (opts.verbose)
-    llvm::errs() << "  [6/7] transforms applied\n";
+  reportStage("transform");
 
   // If --emit mlir, dump MLIR before lowering and stop.
   if (opts.emitKind == EmitKind::MLIR) {
@@ -173,11 +177,13 @@ ExitCode Driver::runBuild() {
   }
 
   if ((ec = runCodeGen()) != ExitCode::Success) return ec;
+  reportStage("codegen");
+
   if (opts.verbose) {
     auto end = std::chrono::steady_clock::now();
-    auto ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    llvm::errs() << "  [7/7] codegen complete (" << ms.count() << "ms)\n";
+    auto totalMs =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    llvm::errs() << "  [total] " << (totalMs.count() / 1000.0) << "ms\n";
   }
 
   return ExitCode::Success;

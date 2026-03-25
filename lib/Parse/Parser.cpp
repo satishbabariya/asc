@@ -103,7 +103,48 @@ Decl *Parser::parseItem() {
     decl = parseConstDef();
   else if (tok.is(tok::kw_static))
     decl = parseStaticDef();
-  else {
+  else if (tok.is(tok::identifier)) {
+    // Detect unsupported TypeScript features (RFC-0015 §21).
+    llvm::StringRef spelling = tok.getSpelling();
+    if (spelling == "class") {
+      error(DiagID::ErrUnsupportedFeature,
+            "'class' is not supported; use 'struct' + 'impl' instead");
+      skipToSync();
+      return nullptr;
+    }
+    if (spelling == "interface") {
+      error(DiagID::ErrUnsupportedFeature,
+            "'interface' is not supported; use 'trait' instead");
+      skipToSync();
+      return nullptr;
+    }
+    if (spelling == "async") {
+      error(DiagID::ErrUnsupportedFeature,
+            "'async/await' is not supported; use task.spawn for concurrency");
+      skipToSync();
+      return nullptr;
+    }
+    if (spelling == "namespace") {
+      error(DiagID::ErrUnsupportedFeature,
+            "'namespace' is not supported; use modules (import/export)");
+      skipToSync();
+      return nullptr;
+    }
+    if (spelling == "try") {
+      error(DiagID::ErrUnsupportedFeature,
+            "'try/catch' is not supported; use Result<T,E> and ? operator");
+      skipToSync();
+      return nullptr;
+    }
+    if (spelling == "throw") {
+      error(DiagID::ErrUnsupportedFeature,
+            "'throw' is not supported; use panic!() or Result::Err");
+      skipToSync();
+      return nullptr;
+    }
+    error("expected declaration");
+    return nullptr;
+  } else {
     error("expected declaration");
     return nullptr;
   }
