@@ -43,6 +43,7 @@ add_subdirectory(lib/HIR)
 add_subdirectory(lib/Analysis)
 add_subdirectory(lib/CodeGen)
 add_subdirectory(lib/Driver)
+add_subdirectory(lib/Runtime)
 add_subdirectory(tools/asc)
 
 # Testing
