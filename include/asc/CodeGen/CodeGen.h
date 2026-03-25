@@ -92,6 +92,9 @@ private:
   /// Emit object code or assembly via LLVM backend.
   bool emitMachineCode(llvm::raw_pwrite_stream &os, bool isAsm);
 
+  /// Add DWARF debug info to LLVM module.
+  void addDebugInfo();
+
   /// Map OptLevel to LLVM's CodeGenOptLevel.
   llvm::CodeGenOptLevel getLLVMOptLevel() const;
 

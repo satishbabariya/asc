@@ -9,6 +9,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -111,6 +112,32 @@ bool CodeGenerator::translateToLLVMIR(mlir::ModuleOp module) {
     return false;
   }
   llvmModule->setTargetTriple(opts.targetTriple);
+
+  // Add DWARF debug info if requested.
+  if (opts.debugInfo) {
+    addDebugInfo();
+  }
+
+  // No-GC verification: scan for GC intrinsics (must never appear).
+  for (auto &func : *llvmModule) {
+    for (auto &bb : func) {
+      for (auto &inst : bb) {
+        if (auto *call = llvm::dyn_cast<llvm::CallInst>(&inst)) {
+          if (auto *callee = call->getCalledFunction()) {
+            llvm::StringRef name = callee->getName();
+            if (name.starts_with("llvm.gcroot") ||
+                name.starts_with("llvm.gcwrite") ||
+                name.starts_with("llvm.gcread")) {
+              llvm::errs() << "internal error: GC intrinsic found in output "
+                           << "(asc is a no-GC compiler): " << name << "\n";
+              return false;
+            }
+          }
+        }
+      }
+    }
+  }
+
   return true;
 }
 
@@ -227,6 +254,44 @@ unsigned CodeGenerator::getLLVMOptLevelNum() const {
   case OptLevel::Oz: return 2;
   }
   return 2;
+}
+
+void CodeGenerator::addDebugInfo() {
+  // Create a DIBuilder for the module.
+  llvm::DIBuilder dib(*llvmModule);
+
+  // Compile unit.
+  auto *file = dib.createFile(
+      opts.outputFile.empty() ? "<stdin>" : opts.outputFile, ".");
+  auto *cu = dib.createCompileUnit(
+      llvm::dwarf::DW_LANG_C, file, "asc 0.1.0",
+      opts.optLevel != OptLevel::O0, /*Flags=*/"", /*RV=*/0);
+
+  // Add subprogram info for each function.
+  for (auto &func : *llvmModule) {
+    if (func.isDeclaration())
+      continue;
+
+    auto *funcType = dib.createSubroutineType(dib.getOrCreateTypeArray({}));
+    auto *sp = dib.createFunction(
+        file, func.getName(), func.getName(), file,
+        /*LineNo=*/1, funcType, /*ScopeLine=*/1,
+        llvm::DINode::FlagPrototyped,
+        llvm::DISubprogram::SPFlagDefinition);
+    func.setSubprogram(sp);
+
+    // Set debug location on all instructions.
+    for (auto &bb : func) {
+      for (auto &inst : bb) {
+        if (!inst.getDebugLoc()) {
+          inst.setDebugLoc(llvm::DILocation::get(
+              llvmContext, /*Line=*/1, /*Col=*/0, sp));
+        }
+      }
+    }
+  }
+
+  dib.finalize();
 }
 
 } // namespace asc
