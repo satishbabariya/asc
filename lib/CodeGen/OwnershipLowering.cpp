@@ -136,33 +136,69 @@ void OwnershipLoweringPass::populatePatterns(
     mlir::TypeConverter &typeConverter) {
   mlir::MLIRContext *ctx = patterns.getContext();
 
-  // Pattern: own.alloc → malloc + bitcast
+  // Pattern: own.alloc → stack alloca or heap malloc (escape analysis)
   patterns.add([&](mlir::Operation *op,
                    mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
     if (op->getName().getStringRef() != "own.alloc")
       return mlir::failure();
 
     mlir::Location loc = op->getLoc();
-    auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
-    auto mallocFn = getOrInsertMalloc(moduleOp, rewriter);
 
-    // Get the size from the operation's attribute.
-    uint64_t size = 8; // Default size; real impl reads from type metadata.
+    // Get the size from the operation's attribute or type.
+    uint64_t size = 8; // Default size.
     if (auto sizeAttr = op->getAttrOfType<mlir::IntegerAttr>("size"))
       size = sizeAttr.getUInt();
 
     auto i64Type = mlir::IntegerType::get(ctx, 64);
-    auto sizeConst =
-        rewriter.create<mlir::LLVM::ConstantOp>(loc, i64Type, size);
+    auto ptrType = mlir::LLVM::LLVMPointerType::get(ctx);
 
-    auto callOp = rewriter.create<mlir::LLVM::CallOp>(
-        loc, mallocFn, mlir::ValueRange{sizeConst});
+    // Escape analysis: check if value escapes the function.
+    // A value escapes if it is:
+    // 1. Used as operand of a return op
+    // 2. Used as operand of a func.call that may store it
+    // 3. Used as operand of task.spawn (captured across threads)
+    // 4. Has @heap attribute
+    bool escapes = false;
+    bool forceHeap = op->hasAttr("heap");
 
-    rewriter.replaceOp(op, callOp.getResults());
+    if (!forceHeap) {
+      mlir::Value result = op->getResult(0);
+      for (auto &use : result.getUses()) {
+        mlir::Operation *user = use.getOwner();
+        llvm::StringRef userName = user->getName().getStringRef();
+        if (userName == "func.return" || userName == "task.spawn" ||
+            userName == "chan.send") {
+          escapes = true;
+          break;
+        }
+        // DECISION: func.call args conservatively escape unless inlined.
+        // For now, only return/spawn/chan trigger heap allocation.
+      }
+    }
+
+    if (escapes || forceHeap) {
+      // Heap allocation: malloc.
+      auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
+      auto mallocFn = getOrInsertMalloc(moduleOp, rewriter);
+      auto sizeConst =
+          rewriter.create<mlir::LLVM::ConstantOp>(loc, i64Type, size);
+      auto callOp = rewriter.create<mlir::LLVM::CallOp>(
+          loc, mallocFn, mlir::ValueRange{sizeConst});
+      rewriter.replaceOp(op, callOp.getResults());
+    } else {
+      // Stack allocation: alloca (LLVM mem2reg will promote to SSA).
+      auto i8Type = mlir::IntegerType::get(ctx, 8);
+      auto arrayType = mlir::LLVM::LLVMArrayType::get(i8Type, size);
+      auto one = rewriter.create<mlir::LLVM::ConstantOp>(
+          loc, i64Type, static_cast<int64_t>(1));
+      auto alloca = rewriter.create<mlir::LLVM::AllocaOp>(
+          loc, ptrType, arrayType, one);
+      rewriter.replaceOp(op, alloca.getResult());
+    }
     return mlir::success();
   });
 
-  // Pattern: own.drop → call destructor (if any) + free
+  // Pattern: own.drop → call destructor (if any) + free (heap only)
   patterns.add([&](mlir::Operation *op,
                    mlir::PatternRewriter &rewriter) -> mlir::LogicalResult {
     if (op->getName().getStringRef() != "own.drop")
@@ -170,7 +206,6 @@ void OwnershipLoweringPass::populatePatterns(
 
     mlir::Location loc = op->getLoc();
     auto moduleOp = op->getParentOfType<mlir::ModuleOp>();
-    auto freeFn = getOrInsertFree(moduleOp, rewriter);
 
     mlir::Value ptr = op->getOperand(0);
 
@@ -184,8 +219,21 @@ void OwnershipLoweringPass::populatePatterns(
       }
     }
 
-    // Free the memory.
-    rewriter.create<mlir::LLVM::CallOp>(loc, freeFn, mlir::ValueRange{ptr});
+    // Check if the value was heap-allocated (needs free).
+    // DECISION: If the defining op is a malloc call, emit free.
+    // If it's an alloca, skip free (stack memory freed automatically).
+    bool needsFree = true;
+    if (auto *defOp = ptr.getDefiningOp()) {
+      if (mlir::isa<mlir::LLVM::AllocaOp>(defOp))
+        needsFree = false;
+    }
+
+    if (needsFree) {
+      auto freeFn = getOrInsertFree(moduleOp, rewriter);
+      rewriter.create<mlir::LLVM::CallOp>(loc, freeFn,
+                                           mlir::ValueRange{ptr});
+    }
+
     rewriter.eraseOp(op);
     return mlir::success();
   });

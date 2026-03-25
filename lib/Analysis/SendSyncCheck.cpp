@@ -4,6 +4,8 @@
 // that shared references across threads satisfy Sync.
 
 #include "asc/Analysis/SendSyncCheck.h"
+#include "asc/HIR/OwnTypes.h"
+#include "asc/HIR/TaskOps.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
@@ -33,32 +35,34 @@ bool SendSyncCheckPass::isSendType(mlir::Type type) const {
   if (isPrimitiveType(type))
     return true;
 
-  // Check type name for ownership dialect types.
-  llvm::StringRef typeName = type.getAbstractType().getName();
+  // OwnValType: check the Send flag from type parameters.
+  if (auto ownVal = mlir::dyn_cast<own::OwnValType>(type))
+    return ownVal.isSend();
 
-  // own.val<T> is Send if T is Send (owned values can be transferred).
-  if (typeName.contains("own.val"))
-    return true; // Conservatively assume inner type is Send for now.
+  // BorrowType (shared): Send if inner type is Sync.
+  if (auto borrow = mlir::dyn_cast<own::BorrowType>(type))
+    return isSyncType(borrow.getInnerType());
 
-  // Borrow types: shared borrows (&T) are Send if T is Sync.
-  if (typeName.contains("borrow") && !typeName.contains("borrow.mut"))
-    return true; // Requires T: Sync, checked separately.
-
-  // Mutable borrows (&mut T) are NOT Send (cannot be sent across threads).
-  if (typeName.contains("borrow.mut"))
+  // BorrowMutType: NEVER Send (RFC-0006 Pass 5).
+  if (mlir::isa<own::BorrowMutType>(type))
     return false;
 
-  // Channel types are Send (the handle can be transferred).
-  if (typeName.contains("chan"))
+  // Channel types are Send.
+  if (mlir::isa<task::ChanTxType>(type) || mlir::isa<task::ChanRxType>(type))
+    return true;
+
+  // Task handles are Send.
+  if (mlir::isa<task::TaskHandleType>(type))
+    return true;
+
+  // Function types are Send.
+  if (mlir::isa<mlir::FunctionType>(type))
     return true;
 
   // LLVM pointer types — raw pointers are NOT Send by default.
+  llvm::StringRef typeName = type.getAbstractType().getName();
   if (typeName.contains("llvm.ptr"))
     return false;
-
-  // Function types are Send (code pointers are safe to share).
-  if (type.isa<mlir::FunctionType>())
-    return true;
 
   // Default: conservatively assume not Send.
   return false;
@@ -69,29 +73,23 @@ bool SendSyncCheckPass::isSyncType(mlir::Type type) const {
   if (isPrimitiveType(type))
     return true;
 
-  llvm::StringRef typeName = type.getAbstractType().getName();
+  // OwnValType: Sync if marked Sync.
+  if (auto ownVal = mlir::dyn_cast<own::OwnValType>(type))
+    return ownVal.isSync();
 
-  // Immutable references are Sync if the referent is Sync.
-  // Shared borrows of Sync types are Sync.
-  if (typeName.contains("borrow") && !typeName.contains("borrow.mut"))
-    return true; // Conservatively assume inner type is Sync.
+  // Shared borrows are Sync if inner type is Sync.
+  if (auto borrow = mlir::dyn_cast<own::BorrowType>(type))
+    return isSyncType(borrow.getInnerType());
 
   // Mutable borrows are NOT Sync.
-  if (typeName.contains("borrow.mut"))
+  if (mlir::isa<own::BorrowMutType>(type))
     return false;
 
-  // own.val<T> is Sync if T is Sync.
-  if (typeName.contains("own.val"))
-    return true; // Conservative assumption.
-
-  // Atomic types are Sync.
-  if (typeName.contains("atomic"))
+  // Function types are Sync.
+  if (mlir::isa<mlir::FunctionType>(type))
     return true;
 
-  // Raw pointers are NOT Sync.
-  if (typeName.contains("llvm.ptr"))
-    return false;
-
+  // Default: conservatively not Sync.
   return false;
 }
 
