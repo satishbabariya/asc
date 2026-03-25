@@ -137,10 +137,12 @@ private:
   std::vector<std::unique_ptr<Scope>> scopes;
   Type *currentReturnType = nullptr;
 
-  // Type registration for struct/enum/trait lookup.
+public:
+  // Type registration for struct/enum/trait lookup (public for HIR builder).
   llvm::StringMap<StructDecl *> structDecls;
   llvm::StringMap<EnumDecl *> enumDecls;
   llvm::StringMap<TraitDecl *> traitDecls;
+private:
 
   // Impl blocks indexed by target type name.
   llvm::StringMap<llvm::SmallVector<ImplDecl *, 2>> implDecls;

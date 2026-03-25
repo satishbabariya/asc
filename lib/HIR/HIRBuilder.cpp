@@ -1,6 +1,7 @@
 #include "asc/HIR/HIRBuilder.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 
@@ -15,6 +16,7 @@ HIRBuilder::HIRBuilder(mlir::MLIRContext &mlirCtx, ASTContext &astCtx,
   mlirCtx.loadDialect<mlir::arith::ArithDialect>();
   mlirCtx.loadDialect<mlir::func::FuncDialect>();
   mlirCtx.loadDialect<mlir::scf::SCFDialect>();
+  mlirCtx.loadDialect<mlir::LLVM::LLVMDialect>();
 }
 
 mlir::OwningOpRef<mlir::ModuleOp>
@@ -76,6 +78,46 @@ mlir::Type HIRBuilder::convertBuiltinType(BuiltinTypeKind kind) {
   return builder.getNoneType();
 }
 
+mlir::Type HIRBuilder::getPtrType() {
+  return mlir::LLVM::LLVMPointerType::get(&mlirCtx);
+}
+
+uint64_t HIRBuilder::getTypeSize(mlir::Type type) {
+  if (type.isIntOrFloat())
+    return (type.getIntOrFloatBitWidth() + 7) / 8;
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(type))
+    return 4; // DECISION: wasm32 pointers are 4 bytes.
+  if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(type)) {
+    uint64_t size = 0;
+    for (auto fieldTy : structTy.getBody())
+      size += getTypeSize(fieldTy);
+    return size;
+  }
+  return 8; // Default fallback.
+}
+
+mlir::Type HIRBuilder::convertStructType(StructDecl *sd) {
+  auto it = structTypeCache.find(sd->getName());
+  if (it != structTypeCache.end())
+    return it->second;
+
+  llvm::SmallVector<mlir::Type> fieldTypes;
+  for (auto *field : sd->getFields()) {
+    mlir::Type ft = convertType(field->getType());
+    fieldTypes.push_back(ft);
+  }
+
+  auto structType = mlir::LLVM::LLVMStructType::getIdentified(
+      &mlirCtx, sd->getName());
+  if (structType.isInitialized()) {
+    structTypeCache[sd->getName()] = structType;
+    return structType;
+  }
+  (void)structType.setBody(fieldTypes, /*isPacked=*/false);
+  structTypeCache[sd->getName()] = structType;
+  return structType;
+}
+
 mlir::Type HIRBuilder::convertType(asc::Type *astType) {
   if (!astType)
     return builder.getNoneType();
@@ -96,9 +138,97 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
     return own::BorrowMutType::get(&mlirCtx, inner);
   }
 
-  // Named types: default to i64 placeholder.
-  // DECISION: Full type resolution deferred to codegen.
-  return builder.getIntegerType(64);
+  // Array type.
+  if (auto *at = dynamic_cast<ArrayType *>(astType)) {
+    mlir::Type elemType = convertType(at->getElementType());
+    return mlir::LLVM::LLVMArrayType::get(elemType, at->getSize());
+  }
+
+  // Tuple type → anonymous LLVM struct.
+  if (auto *tt = dynamic_cast<TupleType *>(astType)) {
+    llvm::SmallVector<mlir::Type> elems;
+    for (auto *e : tt->getElements())
+      elems.push_back(convertType(e));
+    return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, elems);
+  }
+
+  // Named types: resolve through struct/enum declarations.
+  if (auto *nt = dynamic_cast<NamedType *>(astType)) {
+    llvm::StringRef name = nt->getName();
+
+    // Check for struct.
+    auto sit = sema.structDecls.find(name);
+    if (sit != sema.structDecls.end())
+      return convertStructType(sit->second);
+
+    // Check for enum — represent as tagged union.
+    auto eit = sema.enumDecls.find(name);
+    if (eit != sema.enumDecls.end()) {
+      // DECISION: Enums lowered as { tag: i32, payload: [max_size x i8] }.
+      // Compute max variant payload size.
+      uint64_t maxPayload = 0;
+      for (auto *v : eit->second->getVariants()) {
+        uint64_t vSize = 0;
+        for (auto *t : v->getTupleTypes())
+          vSize += getTypeSize(convertType(t));
+        for (auto *f : v->getStructFields())
+          vSize += getTypeSize(convertType(f->getType()));
+        maxPayload = std::max(maxPayload, vSize);
+      }
+      if (maxPayload == 0) maxPayload = 1;
+      auto i32Ty = builder.getIntegerType(32);
+      auto i8Ty = builder.getIntegerType(8);
+      auto payloadTy = mlir::LLVM::LLVMArrayType::get(i8Ty, maxPayload);
+      return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {i32Ty, payloadTy});
+    }
+
+    // Well-known standard types.
+    if (name == "String" || name == "str") {
+      // Fat pointer: { ptr, len }.
+      auto ptrTy = getPtrType();
+      auto i64Ty = builder.getIntegerType(64);
+      return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrTy, i64Ty});
+    }
+    if (name == "Vec") {
+      // { ptr, len, cap }.
+      auto ptrTy = getPtrType();
+      auto i64Ty = builder.getIntegerType(64);
+      return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx,
+                                                     {ptrTy, i64Ty, i64Ty});
+    }
+    if (name == "Box") {
+      return getPtrType();
+    }
+    if (name == "Range") {
+      // { start, end } of the element type.
+      auto i32Ty = builder.getIntegerType(32);
+      return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {i32Ty, i32Ty});
+    }
+
+    // Unknown named type: use opaque pointer.
+    return getPtrType();
+  }
+
+  // Function type.
+  if (auto *ft = dynamic_cast<FunctionType *>(astType)) {
+    llvm::SmallVector<mlir::Type> params;
+    for (auto *p : ft->getParamTypes())
+      params.push_back(convertType(p));
+    mlir::Type ret = convertType(ft->getReturnType());
+    return builder.getFunctionType(params, ret.isa<mlir::NoneType>()
+                                              ? mlir::TypeRange()
+                                              : mlir::TypeRange(ret));
+  }
+
+  // Nullable type → same as Option (tagged union).
+  if (auto *nullable = dynamic_cast<NullableType *>(astType)) {
+    mlir::Type inner = convertType(nullable->getInner());
+    auto i1Ty = builder.getI1Type();
+    return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {i1Ty, inner});
+  }
+
+  // Fallback: opaque pointer.
+  return getPtrType();
 }
 
 mlir::Location HIRBuilder::loc(SourceLocation astLoc) {
@@ -305,9 +435,45 @@ mlir::Value HIRBuilder::visitFloatLiteral(FloatLiteral *e) {
       location, llvm::APFloat(e->getValue()), mlir::cast<mlir::FloatType>(type));
 }
 
-mlir::Value HIRBuilder::visitStringLiteral(StringLiteral *) {
-  // DECISION: String literals not lowered to MLIR yet; placeholder.
-  return {};
+mlir::Value HIRBuilder::visitStringLiteral(StringLiteral *e) {
+  auto location = loc(e->getLocation());
+  // Strip quotes from spelling.
+  std::string val = e->getValue().str();
+  if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+    val = val.substr(1, val.size() - 2);
+
+  // Emit as LLVM global string constant.
+  // DECISION: String literals emit as a global constant + fat pointer (ptr, len).
+  auto ptrType = getPtrType();
+  auto i64Type = builder.getIntegerType(64);
+  auto strType =
+      mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrType, i64Type});
+
+  // Create global.
+  static unsigned strCounter = 0;
+  std::string globalName = "__str_" + std::to_string(strCounter++);
+  {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto globalOp = builder.create<mlir::LLVM::GlobalOp>(
+        location, mlir::LLVM::LLVMArrayType::get(builder.getIntegerType(8),
+                                                   val.size()),
+        /*isConstant=*/true, mlir::LLVM::Linkage::Internal, globalName,
+        builder.getStringAttr(val));
+    (void)globalOp;
+  }
+
+  // Get address of global.
+  auto addrOp = builder.create<mlir::LLVM::AddressOfOp>(
+      location, ptrType, globalName);
+  // Build fat pointer { ptr, len }.
+  auto lenConst = builder.create<mlir::LLVM::ConstantOp>(
+      location, i64Type, static_cast<int64_t>(val.size()));
+  // DECISION: Return just the pointer for now; full fat pointer requires
+  // LLVM struct insert. The str type is used at Sema level.
+  (void)lenConst;
+  (void)strType;
+  return addrOp;
 }
 
 mlir::Value HIRBuilder::visitBoolLiteral(BoolLiteral *e) {

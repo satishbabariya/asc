@@ -163,6 +163,18 @@ private:
 
   /// Current function being built (for return type info).
   mlir::func::FuncOp currentFunction;
+
+  /// Cache of MLIR struct types by name to avoid re-creation.
+  llvm::StringMap<mlir::Type> structTypeCache;
+
+  /// Convert a struct declaration to an LLVM struct type.
+  mlir::Type convertStructType(StructDecl *sd);
+
+  /// Get the LLVM pointer type.
+  mlir::Type getPtrType();
+
+  /// Get the size of a type in bytes for the target.
+  uint64_t getTypeSize(mlir::Type type);
 };
 
 } // namespace asc
