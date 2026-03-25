@@ -122,7 +122,7 @@ TEST(ParserTest, ImportDecl) {
   ASTContext ctx;
   DiagnosticEngine *diags;
   auto items = parseSource(
-      "import { Vec, HashMap } from 'std/collections';", ctx, diags);
+      "import { Vec, HashMap } from \"std/collections\";", ctx, diags);
   ASSERT_EQ(items.size(), 1u);
   auto *id = dynamic_cast<ImportDecl *>(items[0]);
   ASSERT_NE(id, nullptr);

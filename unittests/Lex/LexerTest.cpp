@@ -536,14 +536,17 @@ TEST(LexerTest, InclusiveRange) {
 }
 
 TEST(LexerTest, GenericSyntax) {
+  // own<Vec<i32>> lexes as: own < Vec < i32 >>
+  // The >> is lexed as a single greatergreater token.
+  // The parser handles splitting >> into two > when in generic context.
   auto tokens = lexAll("own<Vec<i32>>");
-  ASSERT_EQ(tokens.size(), 5u);
+  ASSERT_EQ(tokens.size(), 6u);
   EXPECT_EQ(tokens[0].getKind(), tok::kw_own);
   EXPECT_EQ(tokens[1].getKind(), tok::less);
   EXPECT_EQ(tokens[2].getSpelling(), "Vec");
   EXPECT_EQ(tokens[3].getKind(), tok::less);
-  // Note: >> is lexed as greatergreater, parser handles splitting
-  // Actually with i32 in between: own < Vec < i32 > >
+  EXPECT_EQ(tokens[4].getSpelling(), "i32");
+  EXPECT_EQ(tokens[5].getKind(), tok::greatergreater);
 }
 
 TEST(LexerTest, PathExpression) {

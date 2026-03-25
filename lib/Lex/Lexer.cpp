@@ -102,6 +102,12 @@ restart:
   SourceLocation startLoc = currentLoc();
   char c = peekChar();
 
+  // Raw string: r"..." or r#"..."# (must check before identifiers)
+  if (c == 'r' && (peekChar(1) == '"' || peekChar(1) == '#')) {
+    lexRawStringLiteral(result);
+    return;
+  }
+
   // Identifiers and keywords.
   if (isIdentStart(c)) {
     lexIdentifierOrKeyword(result);
@@ -130,12 +136,6 @@ restart:
   if (c == '`') {
     advanceChar(); // consume `
     lexTemplateLiteral(result);
-    return;
-  }
-
-  // Raw string: r"..." or r#"..."#
-  if (c == 'r' && (peekChar(1) == '"' || peekChar(1) == '#')) {
-    lexRawStringLiteral(result);
     return;
   }
 
