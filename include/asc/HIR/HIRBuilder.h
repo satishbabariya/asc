@@ -38,7 +38,8 @@ namespace asc {
 //===----------------------------------------------------------------------===//
 class HIRBuilder : public ASTVisitor<HIRBuilder, mlir::Value> {
 public:
-  HIRBuilder(mlir::MLIRContext &mlirCtx, ASTContext &astCtx, Sema &sema);
+  HIRBuilder(mlir::MLIRContext &mlirCtx, ASTContext &astCtx, Sema &sema,
+             const SourceManager &sm);
 
   /// Build an MLIR module from top-level declarations.
   mlir::OwningOpRef<mlir::ModuleOp>
@@ -150,6 +151,7 @@ private:
   mlir::MLIRContext &mlirCtx;
   ASTContext &astCtx;
   Sema &sema;
+  const SourceManager &sourceManager;
   mlir::OpBuilder builder;
   mlir::ModuleOp module;
 

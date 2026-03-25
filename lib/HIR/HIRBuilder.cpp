@@ -8,8 +8,9 @@
 namespace asc {
 
 HIRBuilder::HIRBuilder(mlir::MLIRContext &mlirCtx, ASTContext &astCtx,
-                       Sema &sema)
-    : mlirCtx(mlirCtx), astCtx(astCtx), sema(sema), builder(&mlirCtx) {
+                       Sema &sema, const SourceManager &sm)
+    : mlirCtx(mlirCtx), astCtx(astCtx), sema(sema), sourceManager(sm),
+      builder(&mlirCtx) {
   // Register dialects.
   mlirCtx.loadDialect<own::OwnDialect>();
   mlirCtx.loadDialect<task::TaskDialect>();
@@ -232,8 +233,12 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
 }
 
 mlir::Location HIRBuilder::loc(SourceLocation astLoc) {
-  // DECISION: Use unknown loc for now; full source loc integration deferred.
-  return builder.getUnknownLoc();
+  if (!astLoc.isValid())
+    return builder.getUnknownLoc();
+  auto lc = sourceManager.getLineAndColumn(astLoc);
+  auto filename = sourceManager.getFilename(astLoc.getFileID());
+  return mlir::FileLineColLoc::get(builder.getStringAttr(filename), lc.line,
+                                    lc.column);
 }
 
 bool HIRBuilder::isOwnedType(asc::Type *astType) {

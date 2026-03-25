@@ -243,7 +243,8 @@ ExitCode Driver::runSema() {
 ExitCode Driver::lowerToHIR() {
   mlirState = std::make_unique<MLIRState>();
 
-  HIRBuilder hirBuilder(mlirState->context, *astCtx, *semaInstance);
+  HIRBuilder hirBuilder(mlirState->context, *astCtx, *semaInstance,
+                        sourceManager);
   mlirState->module = hirBuilder.buildModule(topLevelDecls);
 
   if (!mlirState->module) {
