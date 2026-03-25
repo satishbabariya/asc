@@ -159,7 +159,8 @@ void ConcurrencyLoweringPass::populateWasmPatterns(
     // Load done_flag (busy-wait until set).
     // DECISION: Use a simple load-and-check pattern. The LLVM Wasm
     // backend with -matomics will lower loads to atomic loads.
-    // Full i32.atomic.wait deferred to when Wasm threads finalize.
+    // i32.atomic.wait will be used when the Wasm threads proposal
+    // is finalized and widely supported by runtimes.
     auto numCaptures = rewriter.create<mlir::LLVM::ConstantOp>(
         loc, i32Type, static_cast<int64_t>(0));
     // DECISION: Since we don't know the exact capture count at this
