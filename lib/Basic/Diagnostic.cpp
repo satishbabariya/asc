@@ -140,6 +140,17 @@ void DiagnosticEngine::renderHuman(const Diagnostic &diag) {
   }
 }
 
+static void escapeJSON(llvm::raw_ostream &os, llvm::StringRef s) {
+  for (char c : s) {
+    if (c == '"') os << "\\\"";
+    else if (c == '\\') os << "\\\\";
+    else if (c == '\n') os << "\\n";
+    else if (c == '\r') os << "\\r";
+    else if (c == '\t') os << "\\t";
+    else os << c;
+  }
+}
+
 void DiagnosticEngine::renderJSON(const Diagnostic &diag) {
   auto &os = *out;
   os << "{";
@@ -148,24 +159,40 @@ void DiagnosticEngine::renderJSON(const Diagnostic &diag) {
   if (code)
     os << ",\"code\":\"" << code << "\"";
   os << ",\"message\":\"";
-  // Simple JSON string escaping
-  for (char c : diag.message) {
-    if (c == '"')
-      os << "\\\"";
-    else if (c == '\\')
-      os << "\\\\";
-    else if (c == '\n')
-      os << "\\n";
-    else
-      os << c;
-  }
+  escapeJSON(os, diag.message);
   os << "\"";
   if (diag.location.isValid()) {
     auto lc = sm.getLineAndColumn(diag.location);
     llvm::StringRef filename = sm.getFilename(diag.location.getFileID());
-    os << ",\"file\":\"" << filename << "\"";
+    os << ",\"file\":\"";
+    escapeJSON(os, filename);
+    os << "\"";
     os << ",\"line\":" << lc.line;
     os << ",\"column\":" << lc.column;
+    // LSP-compatible range.
+    os << ",\"range\":{\"start\":{\"line\":" << (lc.line - 1)
+       << ",\"character\":" << (lc.column - 1) << "}"
+       << ",\"end\":{\"line\":" << (lc.line - 1)
+       << ",\"character\":" << lc.column << "}}";
+  }
+  // Related information (notes).
+  if (!diag.notes.empty()) {
+    os << ",\"relatedInformation\":[";
+    for (unsigned i = 0; i < diag.notes.size(); ++i) {
+      if (i > 0) os << ",";
+      os << "{\"message\":\"";
+      escapeJSON(os, diag.notes[i].message);
+      os << "\"";
+      if (diag.notes[i].location.isValid()) {
+        auto nlc = sm.getLineAndColumn(diag.notes[i].location);
+        llvm::StringRef nfile = sm.getFilename(diag.notes[i].location.getFileID());
+        os << ",\"file\":\"";
+        escapeJSON(os, nfile);
+        os << "\",\"line\":" << nlc.line << ",\"column\":" << nlc.column;
+      }
+      os << "}";
+    }
+    os << "]";
   }
   os << "}\n";
 }
@@ -185,7 +212,11 @@ void DiagnosticEngine::renderGithubActions(const Diagnostic &diag) {
     llvm::StringRef filename = sm.getFilename(diag.location.getFileID());
     os << " file=" << filename << ",line=" << lc.line << ",col=" << lc.column;
   }
-  os << "::" << diag.message << "\n";
+  os << "::" << diag.message;
+  const char *code = getDiagCode(diag.id);
+  if (code)
+    os << " (" << code << ")";
+  os << "\n";
 }
 
 } // namespace asc
