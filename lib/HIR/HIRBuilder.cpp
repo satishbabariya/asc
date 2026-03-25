@@ -304,13 +304,21 @@ void HIRBuilder::emitFunctionBody(FunctionDecl *d,
 
   // Emit body.
   currentFunction = funcOp;
-  visitCompoundStmt(d->getBody());
+  mlir::Value bodyResult = visitCompoundStmt(d->getBody());
 
-  // If function returns void and block has no terminator, add return.
+  // If the block has a trailing expression and function has a return type,
+  // emit an implicit return of the trailing value.
   auto &lastBlock = funcOp.back();
   if (lastBlock.empty() || !lastBlock.back().hasTrait<mlir::OpTrait::IsTerminator>()) {
     builder.setInsertionPointToEnd(&lastBlock);
-    builder.create<mlir::func::ReturnOp>(loc(d->getLocation()));
+    bool hasReturnType = funcOp.getFunctionType().getNumResults() > 0;
+    if (hasReturnType && bodyResult) {
+      // Implicit return of trailing expression.
+      builder.create<mlir::func::ReturnOp>(loc(d->getLocation()),
+                                            mlir::ValueRange{bodyResult});
+    } else {
+      builder.create<mlir::func::ReturnOp>(loc(d->getLocation()));
+    }
   }
 
   popScope();
@@ -332,11 +340,13 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
     init = visitExpr(d->getInit());
 
   if (init && !d->getName().empty()) {
-    // Check if variable should be wrapped in own.val.
+    // Only wrap in own.alloc for non-copy owned types (e.g., structs, Box).
+    // Copy types (i32, f64, bool, @copy structs) are passed by value directly.
     auto ownerInfo = sema.getVarOwnership(d);
-    if (ownerInfo.kind == OwnershipKind::Owned &&
-        !mlir::isa_and_nonnull<own::OwnValType>(init.getType())) {
-      // Wrap in own.alloc for owned values.
+    if (ownerInfo.kind == OwnershipKind::Owned && !ownerInfo.isCopy &&
+        !mlir::isa_and_nonnull<own::OwnValType>(init.getType()) &&
+        !mlir::isa<mlir::LLVM::LLVMPointerType>(init.getType())) {
+      // Wrap in own.alloc for heap-owned non-copy values.
       auto ownType = own::OwnValType::get(&mlirCtx, init.getType(),
                                            ownerInfo.isSend, ownerInfo.isSync);
       init = builder.create<own::OwnAllocOp>(location, ownType, init);
@@ -771,20 +781,68 @@ mlir::Value HIRBuilder::visitArrayLiteral(ArrayLiteral *e) {
 
 mlir::Value HIRBuilder::visitStructLiteral(StructLiteral *e) {
   auto location = loc(e->getLocation());
-  // Emit field values.
+
+  // Resolve struct type.
+  mlir::Type structType = convertType(e->getType());
+  bool isLLVMStruct = mlir::isa<mlir::LLVM::LLVMStructType>(structType);
+
+  if (!isLLVMStruct) {
+    // Try to look up struct directly by name.
+    auto sit = sema.structDecls.find(e->getTypeName());
+    if (sit != sema.structDecls.end())
+      structType = convertStructType(sit->second);
+    isLLVMStruct = mlir::isa<mlir::LLVM::LLVMStructType>(structType);
+  }
+
+  if (isLLVMStruct) {
+    // Allocate struct on stack.
+    auto ptrType = getPtrType();
+    auto i64Type = builder.getIntegerType(64);
+    auto one = builder.create<mlir::LLVM::ConstantOp>(
+        location, i64Type, static_cast<int64_t>(1));
+    auto alloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, structType, one);
+
+    // Store each field value.
+    auto sit = sema.structDecls.find(e->getTypeName());
+    if (sit != sema.structDecls.end()) {
+      auto *sd = sit->second;
+      for (const auto &fi : e->getFields()) {
+        if (!fi.value) continue;
+        mlir::Value fieldVal = visitExpr(fi.value);
+        if (!fieldVal) continue;
+
+        // Find field index.
+        unsigned fieldIdx = 0;
+        for (auto *field : sd->getFields()) {
+          if (field->getName() == fi.name) break;
+          ++fieldIdx;
+        }
+        if (fieldIdx >= sd->getFields().size()) continue;
+
+        // GEP to field address and store.
+        auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(32), static_cast<int64_t>(0));
+        auto fieldIdxConst = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(32),
+            static_cast<int64_t>(fieldIdx));
+        auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+            location, ptrType, structType, alloca,
+            mlir::ValueRange{i32Zero, fieldIdxConst});
+        builder.create<mlir::LLVM::StoreOp>(location, fieldVal, fieldPtr);
+      }
+    }
+
+    return alloca;
+  }
+
+  // Fallback for non-struct types: emit field values and return last.
+  mlir::Value last;
   for (const auto &fi : e->getFields()) {
     if (fi.value)
-      visitExpr(fi.value);
+      last = visitExpr(fi.value);
   }
-  // DECISION: Struct literal represented as own.alloc of struct type.
-  // Actual field stores are deferred to codegen lowering.
-  mlir::Type structType = convertType(e->getType());
-  if (!structType || structType.isa<mlir::NoneType>())
-    structType = builder.getIntegerType(64); // placeholder
-  auto ownType = own::OwnValType::get(&mlirCtx, structType);
-  // Emit a placeholder constant for now; full struct codegen deferred.
-  auto zero = builder.create<mlir::arith::ConstantIntOp>(location, 0, structType);
-  return builder.create<own::OwnAllocOp>(location, ownType, zero);
+  return last;
 }
 
 mlir::Value HIRBuilder::visitTupleLiteral(TupleLiteral *e) {
@@ -820,10 +878,63 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
 mlir::Value HIRBuilder::visitFieldAccessExpr(FieldAccessExpr *e) {
   auto location = loc(e->getLocation());
   mlir::Value base = visitExpr(e->getBase());
-  // DECISION: Field access emits borrow.ref of the base and extracts field.
-  // Full GEP lowering deferred to ownership lowering pass.
-  if (base && mlir::isa<own::OwnValType>(base.getType()))
-    return emitBorrowRef(base, location);
+  if (!base) return {};
+
+  // Get the base type to determine struct layout.
+  asc::Type *baseAstType = e->getBase()->getType();
+  if (!baseAstType) return base;
+
+  // Strip ownership wrappers to get the struct type.
+  asc::Type *innerType = baseAstType;
+  if (auto *ot = dynamic_cast<OwnType *>(baseAstType))
+    innerType = ot->getInner();
+  else if (auto *rt = dynamic_cast<RefType *>(baseAstType))
+    innerType = rt->getInner();
+  else if (auto *rmt = dynamic_cast<RefMutType *>(baseAstType))
+    innerType = rmt->getInner();
+
+  auto *namedType = dynamic_cast<NamedType *>(innerType);
+  if (!namedType) return base;
+
+  auto sit = sema.structDecls.find(namedType->getName());
+  if (sit == sema.structDecls.end()) return base;
+
+  StructDecl *sd = sit->second;
+  mlir::Type structMLIRType = convertStructType(sd);
+
+  // Find the field index.
+  unsigned fieldIdx = 0;
+  mlir::Type fieldMLIRType;
+  for (auto *field : sd->getFields()) {
+    if (field->getName() == e->getFieldName()) {
+      fieldMLIRType = convertType(field->getType());
+      break;
+    }
+    ++fieldIdx;
+  }
+  if (fieldIdx >= sd->getFields().size()) return base;
+
+  // If base is a pointer (from alloca/malloc), emit GEP + load.
+  auto ptrType = getPtrType();
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(base.getType())) {
+    auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(32), static_cast<int64_t>(0));
+    auto fieldIdxConst = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(32),
+        static_cast<int64_t>(fieldIdx));
+    auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+        location, ptrType, structMLIRType, base,
+        mlir::ValueRange{i32Zero, fieldIdxConst});
+    return builder.create<mlir::LLVM::LoadOp>(location, fieldMLIRType,
+                                               fieldPtr);
+  }
+
+  // If base is an SSA value (struct passed by value), use extractvalue.
+  if (mlir::isa<mlir::LLVM::LLVMStructType>(base.getType())) {
+    return builder.create<mlir::LLVM::ExtractValueOp>(location, base,
+                                                       fieldIdx);
+  }
+
   return base;
 }
 
@@ -831,8 +942,26 @@ mlir::Value HIRBuilder::visitIndexExpr(IndexExpr *e) {
   auto location = loc(e->getLocation());
   mlir::Value base = visitExpr(e->getBase());
   mlir::Value index = visitExpr(e->getIndex());
-  (void)location;
-  // DECISION: Index expression deferred to codegen — returns base for now.
+  if (!base || !index) return base;
+
+  // Determine element type from AST.
+  asc::Type *baseAstType = e->getBase()->getType();
+  mlir::Type elemMLIRType;
+  if (auto *at = dynamic_cast<ArrayType *>(baseAstType))
+    elemMLIRType = convertType(at->getElementType());
+  else if (auto *st = dynamic_cast<SliceType *>(baseAstType))
+    elemMLIRType = convertType(st->getElementType());
+  else
+    elemMLIRType = builder.getIntegerType(32); // fallback
+
+  // If base is a pointer, GEP with index and load.
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(base.getType())) {
+    auto ptrType = getPtrType();
+    auto elemPtr = builder.create<mlir::LLVM::GEPOp>(
+        location, ptrType, elemMLIRType, base, mlir::ValueRange{index});
+    return builder.create<mlir::LLVM::LoadOp>(location, elemMLIRType, elemPtr);
+  }
+
   return base;
 }
 
