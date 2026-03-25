@@ -95,6 +95,9 @@ private:
   /// Stage 7: Lower to LLVM and emit output.
   ExitCode runCodeGen();
 
+  /// Resolve import declarations by parsing imported files.
+  void resolveImports();
+
   /// Map string to EmitKind.
   static bool parseEmitKind(llvm::StringRef str, EmitKind &kind);
 

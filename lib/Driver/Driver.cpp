@@ -4,6 +4,7 @@
 #include "asc/Lex/Lexer.h"
 #include "asc/Parse/Parser.h"
 #include "asc/Sema/Sema.h"
+#include "asc/AST/Decl.h"
 #include "asc/Analysis/LivenessAnalysis.h"
 #include "asc/Analysis/RegionInference.h"
 #include "asc/Analysis/AliasCheck.h"
@@ -325,7 +326,65 @@ ExitCode Driver::parseSource() {
 
   if (diags->hasErrors())
     return ExitCode::CompileError;
+
+  // Resolve imports: for each ImportDecl, parse the imported module
+  // and merge its exported declarations into our declaration list.
+  resolveImports();
+
   return ExitCode::Success;
+}
+
+void Driver::resolveImports() {
+  // Collect all ImportDecls from top-level declarations.
+  llvm::StringSet<> processedModules;
+  llvm::SmallVector<ImportDecl *, 4> imports;
+  for (auto *decl : topLevelDecls) {
+    if (auto *id = dynamic_cast<ImportDecl *>(decl))
+      imports.push_back(id);
+  }
+
+  for (auto *imp : imports) {
+    std::string modulePath = imp->getModulePath().str();
+    if (processedModules.count(modulePath))
+      continue;
+    processedModules.insert(modulePath);
+
+    // Resolve path relative to input file directory.
+    std::string dir;
+    auto lastSlash = opts.inputFile.rfind('/');
+    if (lastSlash != std::string::npos)
+      dir = opts.inputFile.substr(0, lastSlash + 1);
+
+    std::string resolvedPath = dir + modulePath;
+    if (!resolvedPath.ends_with(".ts"))
+      resolvedPath += ".ts";
+
+    // Try to load and parse the imported file.
+    FileID importFid = sourceManager.loadFile(resolvedPath);
+    if (!importFid.isValid()) {
+      llvm::errs() << "warning: cannot resolve import '" << modulePath
+                    << "' (file: " << resolvedPath << ")\n";
+      continue;
+    }
+
+    Lexer importLexer(importFid, sourceManager, *diags);
+    Parser importParser(importLexer, *astCtx, *diags);
+    auto importedDecls = importParser.parseProgram();
+
+    // Merge exported declarations into our top-level list.
+    for (auto *decl : importedDecls) {
+      if (auto *ed = dynamic_cast<ExportDecl *>(decl)) {
+        if (ed->getInner())
+          topLevelDecls.push_back(ed->getInner());
+      }
+      // Also include non-exported functions/structs that might be
+      // referenced by the imported symbols.
+      if (dynamic_cast<FunctionDecl *>(decl) ||
+          dynamic_cast<StructDecl *>(decl) ||
+          dynamic_cast<EnumDecl *>(decl))
+        topLevelDecls.push_back(decl);
+    }
+  }
 }
 
 ExitCode Driver::runSema() {
