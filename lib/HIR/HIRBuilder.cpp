@@ -870,9 +870,83 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       args.push_back(v);
   }
 
-  // DECISION: Method calls mangled as TypeName_methodName.
   std::string methodName = e->getMethodName().str();
-  auto callee = module.lookupSymbol<mlir::func::FuncOp>(methodName);
+
+  // --- Built-in method intrinsics ---
+  // Resolve receiver type name for intrinsic detection.
+  std::string receiverTypeName;
+  asc::Type *recAstType = e->getReceiver()->getType();
+  if (recAstType) {
+    asc::Type *inner = recAstType;
+    if (auto *ot = dynamic_cast<OwnType *>(recAstType))
+      inner = ot->getInner();
+    if (auto *nt = dynamic_cast<NamedType *>(inner))
+      receiverTypeName = nt->getName().str();
+  }
+
+  // Option::unwrap() → load tag, check, load payload.
+  if ((receiverTypeName == "Option" || receiverTypeName.starts_with("Option_"))
+      && methodName == "unwrap") {
+    if (receiver && mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+      auto i8Ty = builder.getIntegerType(8);
+      auto tag = builder.create<mlir::LLVM::LoadOp>(location, i8Ty, receiver);
+      // DECISION: Panic check deferred; just load payload.
+      auto ptrType = getPtrType();
+      auto i32One = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(32), static_cast<int64_t>(1));
+      auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(32), static_cast<int64_t>(0));
+      // DECISION: Assume i32 payload for now.
+      auto payloadPtr = builder.create<mlir::LLVM::GEPOp>(
+          location, ptrType, builder.getIntegerType(8), receiver,
+          mlir::ValueRange{i32One});
+      return builder.create<mlir::LLVM::LoadOp>(location,
+                                                 builder.getIntegerType(32),
+                                                 payloadPtr);
+    }
+  }
+
+  // Option::is_some() / is_none()
+  if ((receiverTypeName == "Option" || receiverTypeName.starts_with("Option_"))
+      && (methodName == "is_some" || methodName == "is_none")) {
+    if (receiver && mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+      auto i8Ty = builder.getIntegerType(8);
+      auto tag = builder.create<mlir::LLVM::LoadOp>(location, i8Ty, receiver);
+      auto zero = builder.create<mlir::arith::ConstantIntOp>(location, 0, i8Ty);
+      if (methodName == "is_some")
+        return builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::ne, tag, zero);
+      else
+        return builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::eq, tag, zero);
+    }
+  }
+
+  // Vec::len() → load len field.
+  if ((receiverTypeName == "Vec" || receiverTypeName.starts_with("Vec_") ||
+       receiverTypeName == "String")
+      && methodName == "len") {
+    if (receiver && mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+      auto ptrType = getPtrType();
+      auto i64Ty = builder.getIntegerType(64);
+      auto vecStructType = mlir::LLVM::LLVMStructType::getLiteral(
+          &mlirCtx, {ptrType, i64Ty, i64Ty});
+      auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(32), static_cast<int64_t>(0));
+      auto i32One = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(32), static_cast<int64_t>(1));
+      auto lenPtr = builder.create<mlir::LLVM::GEPOp>(
+          location, ptrType, vecStructType, receiver,
+          mlir::ValueRange{i32Zero, i32One});
+      return builder.create<mlir::LLVM::LoadOp>(location, i64Ty, lenPtr);
+    }
+  }
+
+  // Try looking up as mangled name: TypeName_method or just method.
+  std::string mangledName = receiverTypeName + "_" + methodName;
+  auto callee = module.lookupSymbol<mlir::func::FuncOp>(mangledName);
+  if (!callee)
+    callee = module.lookupSymbol<mlir::func::FuncOp>(methodName);
   if (callee) {
     auto callOp = builder.create<mlir::func::CallOp>(location, callee, args);
     return callOp.getNumResults() > 0 ? callOp.getResult(0) : mlir::Value{};
@@ -1288,7 +1362,106 @@ mlir::Value HIRBuilder::visitCharLiteral(CharLiteral *e) {
       loc(e->getLocation()), e->getValue(), builder.getIntegerType(32));
 }
 mlir::Value HIRBuilder::visitArrayRepeatExpr(ArrayRepeatExpr *) { return {}; }
-mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *) { return {}; }
+mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
+  auto location = loc(e->getLocation());
+  llvm::StringRef name = e->getMacroName();
+
+  if (name == "println" || name == "print" || name == "eprintln" ||
+      name == "eprint") {
+    // Emit call to __asc_print or __asc_eprint.
+    bool isErr = name.starts_with("e");
+    std::string rtFn = isErr ? "__asc_eprint" : "__asc_print";
+
+    // Evaluate args — for now, handle single string literal arg.
+    if (!e->getArgs().empty()) {
+      mlir::Value arg = visitExpr(e->getArgs()[0]);
+      if (arg && mlir::isa<mlir::LLVM::LLVMPointerType>(arg.getType())) {
+        // arg is a pointer to string data — get length from global.
+        // DECISION: For string literal args, we pass (ptr, len) to __asc_print.
+        // We need to declare the runtime function.
+        auto ptrType = getPtrType();
+        auto i32Type = builder.getIntegerType(32);
+        auto voidType = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+        auto printFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(rtFn);
+        if (!printFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(
+              voidType, {ptrType, i32Type});
+          printFn =
+              builder.create<mlir::LLVM::LLVMFuncOp>(location, rtFn, fnType);
+        }
+
+        // DECISION: Use a default length. Full implementation would
+        // track string length alongside pointer.
+        auto lenConst = builder.create<mlir::LLVM::ConstantOp>(
+            location, i32Type, static_cast<int64_t>(0));
+        builder.create<mlir::LLVM::CallOp>(
+            location, printFn, mlir::ValueRange{arg, lenConst});
+      }
+    }
+    return {};
+  }
+
+  if (name == "panic" || name == "todo" || name == "unimplemented" ||
+      name == "unreachable") {
+    // Emit call to __asc_panic.
+    auto ptrType = getPtrType();
+    auto i32Type = builder.getIntegerType(32);
+    auto voidType = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+    auto panicFn =
+        module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_panic");
+    if (!panicFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(
+          voidType, {ptrType, i32Type, ptrType, i32Type, i32Type, i32Type});
+      panicFn = builder.create<mlir::LLVM::LLVMFuncOp>(location,
+                                                         "__asc_panic", fnType);
+    }
+
+    auto null = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+    auto zero = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Type, static_cast<int64_t>(0));
+    builder.create<mlir::LLVM::CallOp>(
+        location, panicFn,
+        mlir::ValueRange{null, zero, null, zero, zero, zero});
+    builder.create<mlir::LLVM::UnreachableOp>(location);
+    return {};
+  }
+
+  if (name == "assert" || name == "assert_eq" || name == "assert_ne" ||
+      name == "debug_assert") {
+    // Evaluate condition.
+    if (!e->getArgs().empty()) {
+      mlir::Value cond = visitExpr(e->getArgs()[0]);
+      // DECISION: assert! just evaluates the condition for now.
+      // Full assert with panic on false deferred.
+      (void)cond;
+    }
+    return {};
+  }
+
+  if (name == "size_of" || name == "align_of") {
+    // DECISION: Return 0 as placeholder. Full implementation would
+    // query DataLayout for the type argument.
+    return builder.create<mlir::arith::ConstantIntOp>(
+        location, static_cast<int64_t>(0), builder.getIntegerType(64));
+  }
+
+  if (name == "dbg") {
+    if (!e->getArgs().empty())
+      return visitExpr(e->getArgs()[0]);
+    return {};
+  }
+
+  // Unknown macro: evaluate args.
+  for (auto *arg : e->getArgs())
+    visitExpr(arg);
+  return {};
+}
 mlir::Value HIRBuilder::visitUnsafeBlockExpr(UnsafeBlockExpr *e) {
   return visitCompoundStmt(e->getBody());
 }
