@@ -82,7 +82,7 @@ Suggested prompts to get started:
 "Read all files in rfcs/ and check for any contradictions between RFCs"
 
 # Start implementing a stage
-"Read RFC-0003 and RFC-0005 and scaffold the Rust crate structure for the HIR module"
+"Read RFC-0003 and RFC-0005 and scaffold the C++ library structure for the HIR module"
 
 # Deepen a specific RFC
 "Read RFC-0006 and expand the region inference algorithm with pseudocode"
@@ -98,13 +98,19 @@ asc-llvm-compiler/
 ├── rfcs/                          # Design documents (this directory)
 │   ├── RFC-0001-*.md … RFC-0010-*.md
 │   └── decisions/
-├── crates/                        # Rust implementation (future)
-│   ├── asc-lexer/
-│   ├── asc-parser/
-│   ├── asc-sema/
-│   ├── asc-hir/                   # MLIR dialect bindings
-│   ├── asc-codegen/               # LLVM IR emission
-│   └── asc/                       # CLI driver
+├── include/asc/                   # C++ headers
+│   ├── Basic/                     # SourceManager, Diagnostics, TokenKinds
+│   ├── Lex/                       # Lexer
+│   ├── Parse/                     # Parser
+│   ├── AST/                       # AST nodes, ASTContext
+│   ├── Sema/                      # Semantic analysis
+│   ├── HIR/                       # MLIR dialect definitions
+│   ├── Analysis/                  # Borrow checker passes
+│   ├── CodeGen/                   # LLVM IR lowering
+│   └── Driver/                    # CLI driver
+├── lib/                           # C++ implementation
+│   ├── Basic/ Lex/ Parse/ AST/ Sema/ HIR/ Analysis/ CodeGen/ Driver/
+├── tools/asc/                     # CLI entry point (main.cpp)
 ├── tests/
 │   ├── borrow-check/              # Expected-error tests for borrow checker
 │   ├── codegen/                   # Wasm output snapshot tests
