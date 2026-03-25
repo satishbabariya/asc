@@ -6,12 +6,18 @@ Type *Sema::resolveType(Type *t) {
   if (!t)
     return nullptr;
 
-  // If it's a named type, try to resolve to a struct/enum.
   if (auto *nt = dynamic_cast<NamedType *>(t)) {
+    // If the type has generic args (e.g. Vec<i32>), monomorphize.
+    if (!nt->getGenericArgs().empty()) {
+      Type *mono = monomorphizeType(nt->getName(), nt->getGenericArgs());
+      if (mono)
+        return mono;
+    }
+
     // Check if it's a known struct.
     auto sit = structDecls.find(nt->getName());
     if (sit != structDecls.end())
-      return t; // keep as named, resolved
+      return t;
 
     auto eit = enumDecls.find(nt->getName());
     if (eit != enumDecls.end())
@@ -176,6 +182,149 @@ void Sema::rejectUnsupportedFeature(llvm::StringRef feature,
                                     SourceLocation loc) {
   diags.emitError(loc, DiagID::ErrUnsupportedFeature,
                   "unsupported TypeScript feature: " + feature.str());
+}
+
+// --- Generic monomorphization ---
+
+std::string Sema::mangleTypeName(Type *t) {
+  if (!t) return "void";
+  if (auto *bt = dynamic_cast<BuiltinType *>(t)) {
+    switch (bt->getBuiltinKind()) {
+    case BuiltinTypeKind::I8: return "i8";
+    case BuiltinTypeKind::I16: return "i16";
+    case BuiltinTypeKind::I32: return "i32";
+    case BuiltinTypeKind::I64: return "i64";
+    case BuiltinTypeKind::I128: return "i128";
+    case BuiltinTypeKind::U8: return "u8";
+    case BuiltinTypeKind::U16: return "u16";
+    case BuiltinTypeKind::U32: return "u32";
+    case BuiltinTypeKind::U64: return "u64";
+    case BuiltinTypeKind::U128: return "u128";
+    case BuiltinTypeKind::F32: return "f32";
+    case BuiltinTypeKind::F64: return "f64";
+    case BuiltinTypeKind::Bool: return "bool";
+    case BuiltinTypeKind::Char: return "char";
+    case BuiltinTypeKind::USize: return "usize";
+    case BuiltinTypeKind::ISize: return "isize";
+    case BuiltinTypeKind::Void: return "void";
+    case BuiltinTypeKind::Never: return "never";
+    }
+  }
+  if (auto *nt = dynamic_cast<NamedType *>(t))
+    return nt->getName().str();
+  if (auto *ot = dynamic_cast<OwnType *>(t))
+    return "own_" + mangleTypeName(ot->getInner());
+  if (auto *rt = dynamic_cast<RefType *>(t))
+    return "ref_" + mangleTypeName(rt->getInner());
+  return "unknown";
+}
+
+std::string Sema::mangleGenericName(llvm::StringRef base,
+                                    const std::vector<Type *> &args) {
+  std::string mangled = base.str();
+  for (auto *a : args)
+    mangled += "_" + mangleTypeName(a);
+  return mangled;
+}
+
+Type *Sema::monomorphizeType(llvm::StringRef baseName,
+                             const std::vector<Type *> &typeArgs) {
+  std::string mangled = mangleGenericName(baseName, typeArgs);
+
+  // Check cache.
+  auto cacheIt = monoCache.find(mangled);
+  if (cacheIt != monoCache.end()) {
+    return ctx.create<NamedType>(mangled, std::vector<Type *>{},
+                                 SourceLocation());
+  }
+
+  // Try monomorphizing a struct.
+  auto sit = structDecls.find(baseName);
+  if (sit != structDecls.end()) {
+    StructDecl *generic = sit->second;
+    if (generic->getGenericParams().empty()) return nullptr;
+
+    // Build type substitution map: generic param name → concrete type.
+    llvm::StringMap<Type *> subst;
+    for (unsigned i = 0; i < generic->getGenericParams().size() &&
+                         i < typeArgs.size(); ++i) {
+      subst[generic->getGenericParams()[i].name] = typeArgs[i];
+    }
+
+    // Clone fields with substitution.
+    std::vector<FieldDecl *> newFields;
+    for (auto *field : generic->getFields()) {
+      Type *ft = field->getType();
+      // Substitute if field type is a generic parameter.
+      if (auto *nt = dynamic_cast<NamedType *>(ft)) {
+        auto substIt = subst.find(nt->getName());
+        if (substIt != subst.end())
+          ft = substIt->second;
+      }
+      newFields.push_back(ctx.create<FieldDecl>(
+          field->getName().str(), ft, field->getLocation()));
+    }
+
+    auto *monoStruct = ctx.create<StructDecl>(
+        mangled, std::vector<GenericParam>{}, std::move(newFields),
+        generic->getLocation());
+    // Copy attributes.
+    for (const auto &attr : generic->getAttributes())
+      monoStruct->addAttribute(attr);
+
+    structDecls[mangled] = monoStruct;
+    monoCache[mangled] = monoStruct;
+    return ctx.create<NamedType>(mangled, std::vector<Type *>{},
+                                 SourceLocation());
+  }
+
+  // Try monomorphizing an enum.
+  auto eit = enumDecls.find(baseName);
+  if (eit != enumDecls.end()) {
+    EnumDecl *generic = eit->second;
+    if (generic->getGenericParams().empty()) return nullptr;
+
+    llvm::StringMap<Type *> subst;
+    for (unsigned i = 0; i < generic->getGenericParams().size() &&
+                         i < typeArgs.size(); ++i) {
+      subst[generic->getGenericParams()[i].name] = typeArgs[i];
+    }
+
+    // Clone variants with substitution.
+    std::vector<EnumVariantDecl *> newVariants;
+    for (auto *v : generic->getVariants()) {
+      std::vector<Type *> newTupleTypes;
+      for (auto *tt : v->getTupleTypes()) {
+        Type *resolved = tt;
+        // Substitute through own<T>, ref<T>, etc.
+        if (auto *ot = dynamic_cast<OwnType *>(tt)) {
+          if (auto *inner = dynamic_cast<NamedType *>(ot->getInner())) {
+            auto substIt = subst.find(inner->getName());
+            if (substIt != subst.end())
+              resolved = ctx.create<OwnType>(substIt->second, tt->getLocation());
+          }
+        } else if (auto *nt = dynamic_cast<NamedType *>(tt)) {
+          auto substIt = subst.find(nt->getName());
+          if (substIt != subst.end())
+            resolved = substIt->second;
+        }
+        newTupleTypes.push_back(resolved);
+      }
+      newVariants.push_back(ctx.create<EnumVariantDecl>(
+          v->getName().str(), v->getVariantKind(), std::move(newTupleTypes),
+          std::vector<FieldDecl *>{}, v->getValue(), v->getLocation()));
+    }
+
+    auto *monoEnum = ctx.create<EnumDecl>(
+        mangled, std::vector<GenericParam>{}, std::move(newVariants),
+        generic->getLocation());
+    enumDecls[mangled] = monoEnum;
+    monoCache[mangled] = monoEnum;
+    return ctx.create<NamedType>(mangled, std::vector<Type *>{},
+                                 SourceLocation());
+  }
+
+  return nullptr;
 }
 
 } // namespace asc

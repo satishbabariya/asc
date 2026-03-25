@@ -152,6 +152,16 @@ private:
   // Impl blocks indexed by target type name.
   llvm::StringMap<llvm::SmallVector<ImplDecl *, 2>> implDecls;
 
+  // Generic monomorphization cache: mangled name → instantiated decl.
+  llvm::StringMap<Decl *> monoCache;
+
+  // Monomorphize a generic type with concrete arguments.
+  Type *monomorphizeType(llvm::StringRef baseName,
+                         const std::vector<Type *> &typeArgs);
+  std::string mangleGenericName(llvm::StringRef base,
+                                const std::vector<Type *> &args);
+  std::string mangleTypeName(Type *t);
+
   // Ownership tracking for expressions and variables.
   llvm::DenseMap<Expr *, OwnershipInfo> exprOwnership;
   llvm::DenseMap<VarDecl *, OwnershipInfo> varOwnership;
