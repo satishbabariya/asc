@@ -44,7 +44,7 @@ void Sema::popScope() {
 }
 
 void Sema::analyze(std::vector<Decl *> &items) {
-  // First pass: register all type declarations.
+  // First pass: register all type declarations and impl blocks.
   for (auto *item : items) {
     if (auto *sd = dynamic_cast<StructDecl *>(item))
       structDecls[sd->getName()] = sd;
@@ -52,6 +52,19 @@ void Sema::analyze(std::vector<Decl *> &items) {
       enumDecls[ed->getName()] = ed;
     else if (auto *td = dynamic_cast<TraitDecl *>(item))
       traitDecls[td->getName()] = td;
+    else if (auto *id = dynamic_cast<ImplDecl *>(item)) {
+      if (auto *nt = dynamic_cast<NamedType *>(id->getTargetType()))
+        implDecls[nt->getName()].push_back(id);
+    }
+    // Register exported items' inner declarations.
+    else if (auto *ed = dynamic_cast<ExportDecl *>(item)) {
+      if (auto *inner = ed->getInner()) {
+        if (auto *sd = dynamic_cast<StructDecl *>(inner))
+          structDecls[sd->getName()] = sd;
+        else if (auto *enm = dynamic_cast<EnumDecl *>(inner))
+          enumDecls[enm->getName()] = enm;
+      }
+    }
   }
 
   // Second pass: check all declarations.

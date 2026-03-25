@@ -17,11 +17,15 @@ void Sema::checkFunctionDecl(FunctionDecl *d) {
   if (d->getBody()) {
     pushScope();
 
-    // Register parameters.
+    // Register parameters with ownership from type annotations.
     for (const auto &param : d->getParams()) {
       Symbol psym;
       psym.name = param.name;
       psym.type = param.type;
+      psym.ownership.kind = inferParamOwnership(param.type);
+      psym.ownership.isCopy = param.type ? isCopyType(param.type) : false;
+      psym.ownership.isSend = param.type ? isSendType(param.type) : false;
+      psym.ownership.isSync = param.type ? isSyncType(param.type) : false;
       currentScope->declare(param.name, std::move(psym));
     }
 
@@ -42,19 +46,43 @@ void Sema::checkStructDecl(StructDecl *d) {
   sym.decl = d;
   currentScope->declare(d->getName(), std::move(sym));
 
-  // Validate @copy: all fields must be copy types.
-  bool hasCopy = false;
+  // Parse attributes.
+  bool hasCopy = false, hasSend = false, hasSync = false;
   for (const auto &attr : d->getAttributes()) {
-    if (attr == "@copy")
-      hasCopy = true;
+    if (attr == "@copy") hasCopy = true;
+    if (attr == "@send") hasSend = true;
+    if (attr == "@sync") hasSync = true;
   }
 
+  // Validate @copy: all fields must be copy types.
   if (hasCopy) {
     for (auto *field : d->getFields()) {
       if (field->getType() && !isCopyType(field->getType())) {
         diags.emitError(field->getLocation(), DiagID::ErrMissingCopyAttribute,
                         "field '" + field->getName().str() +
                         "' is not @copy but struct is marked @copy");
+      }
+    }
+  }
+
+  // Validate @send: all fields must be Send.
+  if (hasSend) {
+    for (auto *field : d->getFields()) {
+      if (field->getType() && !isSendType(field->getType())) {
+        diags.emitError(field->getLocation(), DiagID::ErrNonSendCaptured,
+                        "field '" + field->getName().str() +
+                        "' is not Send but struct is marked @send");
+      }
+    }
+  }
+
+  // Validate @sync: all fields must be Sync.
+  if (hasSync) {
+    for (auto *field : d->getFields()) {
+      if (field->getType() && !isSyncType(field->getType())) {
+        diags.emitError(field->getLocation(), DiagID::ErrNonSendCaptured,
+                        "field '" + field->getName().str() +
+                        "' is not Sync but struct is marked @sync");
       }
     }
   }
@@ -81,6 +109,11 @@ void Sema::checkTraitDecl(TraitDecl *d) {
 }
 
 void Sema::checkImplDecl(ImplDecl *d) {
+  // Register impl by target type name for method resolution.
+  if (auto *nt = dynamic_cast<NamedType *>(d->getTargetType())) {
+    implDecls[nt->getName()].push_back(d);
+  }
+
   // If this is a trait impl, verify all required methods are provided.
   if (d->isTraitImpl()) {
     if (auto *namedType = dynamic_cast<NamedType *>(d->getTraitType())) {
@@ -131,6 +164,25 @@ void Sema::checkVarDecl(VarDecl *d) {
     d->setType(type);
   }
 
+  // Determine ownership.
+  OwnershipInfo ownerInfo;
+  if (type) {
+    if (dynamic_cast<OwnType *>(type))
+      ownerInfo.kind = OwnershipKind::Owned;
+    else if (dynamic_cast<RefType *>(type))
+      ownerInfo.kind = OwnershipKind::Borrowed;
+    else if (dynamic_cast<RefMutType *>(type))
+      ownerInfo.kind = OwnershipKind::BorrowedMut;
+    else if (isCopyType(type))
+      ownerInfo.kind = OwnershipKind::Copied;
+    else
+      ownerInfo.kind = OwnershipKind::Owned; // Default: owned
+    ownerInfo.isCopy = isCopyType(type);
+    ownerInfo.isSend = isSendType(type);
+    ownerInfo.isSync = isSyncType(type);
+  }
+  varOwnership[d] = ownerInfo;
+
   // Register in scope.
   if (!d->getName().empty()) {
     Symbol sym;
@@ -138,6 +190,7 @@ void Sema::checkVarDecl(VarDecl *d) {
     sym.decl = d;
     sym.type = type;
     sym.isMutable = !d->isConst();
+    sym.ownership = ownerInfo;
     if (!currentScope->declare(d->getName(), std::move(sym))) {
       diags.emitError(d->getLocation(), DiagID::ErrDuplicateDeclaration,
                       "duplicate variable declaration '" +

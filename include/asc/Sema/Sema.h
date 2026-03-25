@@ -14,12 +14,31 @@
 
 namespace asc {
 
+/// Ownership classification for values and expressions.
+enum class OwnershipKind {
+  Owned,       // sole owner — must be moved or dropped
+  Borrowed,    // shared immutable borrow (ref<T>)
+  BorrowedMut, // exclusive mutable borrow (refmut<T>)
+  Moved,       // ownership transferred to another binding/call
+  Copied,      // @copy type — no ownership tracking
+  Unknown,     // not yet inferred
+};
+
+/// Ownership metadata attached to expressions and variables.
+struct OwnershipInfo {
+  OwnershipKind kind = OwnershipKind::Unknown;
+  bool isSend = false;
+  bool isSync = false;
+  bool isCopy = false;
+};
+
 /// Symbol table entry.
 struct Symbol {
   std::string name;
   Decl *decl = nullptr;
   Type *type = nullptr;
   bool isMutable = false;
+  OwnershipInfo ownership;
 };
 
 /// Lexical scope for name resolution.
@@ -71,6 +90,29 @@ private:
   Type *checkIfExpr(IfExpr *e);
   Type *checkBlockExpr(BlockExpr *e);
   Type *checkAssignExpr(AssignExpr *e);
+  Type *checkMethodCallExpr(MethodCallExpr *e);
+  Type *checkFieldAccessExpr(FieldAccessExpr *e);
+  Type *checkIndexExpr(IndexExpr *e);
+  Type *checkMatchExpr(MatchExpr *e);
+  Type *checkForExpr(ForExpr *e);
+  Type *checkWhileExpr(WhileExpr *e);
+  Type *checkLoopExpr(LoopExpr *e);
+  Type *checkClosureExpr(ClosureExpr *e);
+  Type *checkRangeExpr(RangeExpr *e);
+  Type *checkCastExpr(CastExpr *e);
+  Type *checkStructLiteral(StructLiteral *e);
+  Type *checkTupleLiteral(TupleLiteral *e);
+  Type *checkArrayLiteral(ArrayLiteral *e);
+  Type *checkArrayRepeatExpr(ArrayRepeatExpr *e);
+  Type *checkMacroCallExpr(MacroCallExpr *e);
+  Type *checkTryExpr(TryExpr *e);
+  Type *checkPathExpr(PathExpr *e);
+  Type *checkTemplateLiteralExpr(TemplateLiteralExpr *e);
+
+  // --- Ownership inference (SemaExpr.cpp) ---
+  void inferCallOwnership(CallExpr *e, FunctionDecl *callee);
+  OwnershipKind inferParamOwnership(Type *paramType);
+  void markExprOwnership(Expr *e, OwnershipKind kind);
 
   // --- Statement checking ---
   void checkStmt(Stmt *s);
@@ -99,6 +141,25 @@ private:
   llvm::StringMap<StructDecl *> structDecls;
   llvm::StringMap<EnumDecl *> enumDecls;
   llvm::StringMap<TraitDecl *> traitDecls;
+
+  // Impl blocks indexed by target type name.
+  llvm::StringMap<llvm::SmallVector<ImplDecl *, 2>> implDecls;
+
+  // Ownership tracking for expressions and variables.
+  llvm::DenseMap<Expr *, OwnershipInfo> exprOwnership;
+  llvm::DenseMap<VarDecl *, OwnershipInfo> varOwnership;
+
+public:
+  /// Get ownership info for an expression (used by HIR Builder).
+  OwnershipInfo getExprOwnership(Expr *e) const {
+    auto it = exprOwnership.find(e);
+    return it != exprOwnership.end() ? it->second : OwnershipInfo{};
+  }
+  /// Get ownership info for a variable.
+  OwnershipInfo getVarOwnership(VarDecl *d) const {
+    auto it = varOwnership.find(d);
+    return it != varOwnership.end() ? it->second : OwnershipInfo{};
+  }
 };
 
 } // namespace asc
