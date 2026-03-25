@@ -1,8 +1,232 @@
-// CodeGen — implementation placeholder.
-// Will be implemented in Phase 6.
-
 #include "asc/CodeGen/CodeGen.h"
+#include "asc/CodeGen/ConcurrencyLowering.h"
+#include "asc/CodeGen/OwnershipLowering.h"
+#include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Export.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetOptions.h"
 
 namespace asc {
-// TODO: implement
+
+CodeGenerator::CodeGenerator(const CodeGenOptions &opts) : opts(opts) {
+  // Initialize all LLVM targets.
+  llvm::InitializeAllTargetInfos();
+  llvm::InitializeAllTargets();
+  llvm::InitializeAllTargetMCs();
+  llvm::InitializeAllAsmParsers();
+  llvm::InitializeAllAsmPrinters();
+}
+
+CodeGenerator::~CodeGenerator() = default;
+
+int CodeGenerator::generate(mlir::ModuleOp module) {
+  // Step 1: Emit MLIR if requested.
+  if (opts.emitKind == EmitKind::MLIR) {
+    if (opts.outputFile.empty()) {
+      return emitMLIR(module, llvm::outs()) ? 1 : 0;
+    }
+    std::error_code ec;
+    llvm::raw_fd_ostream os(opts.outputFile, ec);
+    if (ec) {
+      llvm::errs() << "error: cannot open output file: " << ec.message() << "\n";
+      return 2;
+    }
+    return emitMLIR(module, os) ? 1 : 0;
+  }
+
+  // Step 2: Run MLIR lowering passes.
+  if (!runMLIRLowering(module))
+    return 1;
+
+  // Step 3: Translate to LLVM IR.
+  if (!translateToLLVMIR(module))
+    return 1;
+
+  // Step 4: Emit LLVM IR if requested.
+  if (opts.emitKind == EmitKind::LLVMIR) {
+    if (opts.outputFile.empty()) {
+      return emitLLVMIR(llvm::outs()) ? 1 : 0;
+    }
+    std::error_code ec;
+    llvm::raw_fd_ostream os(opts.outputFile, ec);
+    if (ec)
+      return 2;
+    return emitLLVMIR(os) ? 1 : 0;
+  }
+
+  // Step 5: Setup target machine.
+  if (!setupTargetMachine())
+    return 2;
+
+  // Step 6: Run LLVM optimization passes.
+  runLLVMOptPasses();
+
+  // Step 7: Emit output.
+  if (opts.outputFile.empty()) {
+    return emitOutput(llvm::outs()) ? 1 : 0;
+  }
+  std::error_code ec;
+  llvm::raw_fd_ostream os(opts.outputFile, ec, llvm::sys::fs::OF_None);
+  if (ec) {
+    llvm::errs() << "error: cannot open output file: " << ec.message() << "\n";
+    return 2;
+  }
+  return emitOutput(os) ? 1 : 0;
+}
+
+bool CodeGenerator::runMLIRLowering(mlir::ModuleOp module) {
+  mlir::PassManager pm(module.getContext());
+
+  // Custom lowering passes.
+  pm.addPass(std::make_unique<OwnershipLoweringPass>());
+  pm.addPass(createConcurrencyLoweringPass(llvm::Triple(opts.targetTriple)));
+
+  // Standard MLIR-to-LLVM lowering.
+  pm.addPass(mlir::createConvertSCFToCFPass());
+  pm.addPass(mlir::createConvertFuncToLLVMPass());
+  pm.addPass(mlir::createArithToLLVMConversionPass());
+  pm.addPass(mlir::createConvertControlFlowToLLVMPass());
+
+  return mlir::succeeded(pm.run(module));
+}
+
+bool CodeGenerator::translateToLLVMIR(mlir::ModuleOp module) {
+  mlir::registerLLVMDialectTranslation(*module.getContext());
+
+  llvmModule = mlir::translateModuleToLLVMIR(module, llvmContext);
+  if (!llvmModule) {
+    llvm::errs() << "error: failed to translate MLIR to LLVM IR\n";
+    return false;
+  }
+  llvmModule->setTargetTriple(opts.targetTriple);
+  return true;
+}
+
+bool CodeGenerator::setupTargetMachine() {
+  std::string error;
+  const auto *target =
+      llvm::TargetRegistry::lookupTarget(opts.targetTriple, error);
+  if (!target) {
+    llvm::errs() << "error: " << error << "\n";
+    return false;
+  }
+
+  llvm::TargetOptions targetOpts;
+  targetMachine.reset(target->createTargetMachine(
+      opts.targetTriple, "generic", "", targetOpts, llvm::Reloc::PIC_,
+      std::nullopt, getLLVMOptLevel()));
+  if (!targetMachine) {
+    llvm::errs() << "error: could not create target machine\n";
+    return false;
+  }
+
+  llvmModule->setDataLayout(targetMachine->createDataLayout());
+  return true;
+}
+
+void CodeGenerator::runLLVMOptPasses() {
+  if (opts.optLevel == OptLevel::O0)
+    return;
+
+  llvm::LoopAnalysisManager lam;
+  llvm::FunctionAnalysisManager fam;
+  llvm::CGSCCAnalysisManager cgam;
+  llvm::ModuleAnalysisManager mam;
+
+  llvm::PassBuilder pb(targetMachine.get());
+  pb.registerModuleAnalyses(mam);
+  pb.registerCGSCCAnalyses(cgam);
+  pb.registerFunctionAnalyses(fam);
+  pb.registerLoopAnalyses(lam);
+  pb.crossRegisterProxies(lam, fam, cgam, mam);
+
+  llvm::OptimizationLevel optLvl;
+  switch (opts.optLevel) {
+  case OptLevel::O0: optLvl = llvm::OptimizationLevel::O0; break;
+  case OptLevel::O1: optLvl = llvm::OptimizationLevel::O1; break;
+  case OptLevel::O2: optLvl = llvm::OptimizationLevel::O2; break;
+  case OptLevel::O3: optLvl = llvm::OptimizationLevel::O3; break;
+  case OptLevel::Os: optLvl = llvm::OptimizationLevel::Os; break;
+  case OptLevel::Oz: optLvl = llvm::OptimizationLevel::Oz; break;
+  }
+
+  auto mpm = pb.buildPerModuleDefaultPipeline(optLvl);
+  mpm.run(*llvmModule, mam);
+}
+
+bool CodeGenerator::emitOutput(llvm::raw_pwrite_stream &os) {
+  switch (opts.emitKind) {
+  case EmitKind::Wasm:
+  case EmitKind::Object:
+    return emitMachineCode(os, /*isAsm=*/false);
+  case EmitKind::Wat:
+  case EmitKind::Asm:
+    return emitMachineCode(os, /*isAsm=*/true);
+  case EmitKind::LLVMIR:
+    return emitLLVMIR(os);
+  case EmitKind::MLIR:
+    return false; // already handled
+  }
+  return false;
+}
+
+bool CodeGenerator::emitMLIR(mlir::ModuleOp module, llvm::raw_ostream &os) {
+  module.print(os);
+  return false;
+}
+
+bool CodeGenerator::emitLLVMIR(llvm::raw_ostream &os) {
+  llvmModule->print(os, nullptr);
+  return false;
+}
+
+bool CodeGenerator::emitMachineCode(llvm::raw_pwrite_stream &os, bool isAsm) {
+  llvm::legacy::PassManager pm;
+  auto fileType = isAsm ? llvm::CodeGenFileType::AssemblyFile
+                        : llvm::CodeGenFileType::ObjectFile;
+
+  if (targetMachine->addPassesToEmitFile(pm, os, nullptr, fileType)) {
+    llvm::errs() << "error: target cannot emit this file type\n";
+    return true;
+  }
+  pm.run(*llvmModule);
+  return false;
+}
+
+llvm::CodeGenOptLevel CodeGenerator::getLLVMOptLevel() const {
+  switch (opts.optLevel) {
+  case OptLevel::O0: return llvm::CodeGenOptLevel::None;
+  case OptLevel::O1: return llvm::CodeGenOptLevel::Less;
+  case OptLevel::O2: return llvm::CodeGenOptLevel::Default;
+  case OptLevel::O3: return llvm::CodeGenOptLevel::Aggressive;
+  case OptLevel::Os: return llvm::CodeGenOptLevel::Default;
+  case OptLevel::Oz: return llvm::CodeGenOptLevel::Default;
+  }
+  return llvm::CodeGenOptLevel::Default;
+}
+
+unsigned CodeGenerator::getLLVMOptLevelNum() const {
+  switch (opts.optLevel) {
+  case OptLevel::O0: return 0;
+  case OptLevel::O1: return 1;
+  case OptLevel::O2: return 2;
+  case OptLevel::O3: return 3;
+  case OptLevel::Os: return 2;
+  case OptLevel::Oz: return 2;
+  }
+  return 2;
+}
+
 } // namespace asc
