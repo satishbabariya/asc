@@ -8,6 +8,10 @@ if(CMAKE_C_COMPILER)
   add_library(ascRuntime OBJECT
     runtime.c
     wasi_io.c
+    wasi_fs.c
+    wasi_clock.c
+    wasi_random.c
+    atomics.c
   )
   target_compile_options(ascRuntime PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
