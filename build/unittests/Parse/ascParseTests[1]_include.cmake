@@ -1,5 +1,0 @@
-if(EXISTS "/home/user/asc/build/unittests/Parse/ascParseTests[1]_tests.cmake")
-  include("/home/user/asc/build/unittests/Parse/ascParseTests[1]_tests.cmake")
-else()
-  add_test(ascParseTests_NOT_BUILT ascParseTests_NOT_BUILT)
-endif()

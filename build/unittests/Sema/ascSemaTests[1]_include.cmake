@@ -1,5 +1,0 @@
-if(EXISTS "/home/user/asc/build/unittests/Sema/ascSemaTests[1]_tests.cmake")
-  include("/home/user/asc/build/unittests/Sema/ascSemaTests[1]_tests.cmake")
-else()
-  add_test(ascSemaTests_NOT_BUILT ascSemaTests_NOT_BUILT)
-endif()
