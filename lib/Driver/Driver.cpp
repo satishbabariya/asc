@@ -13,6 +13,7 @@
 #include "asc/Analysis/PanicScopeWrap.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include <chrono>
 
@@ -154,6 +155,22 @@ ExitCode Driver::runBuild() {
   if ((ec = runTransforms()) != ExitCode::Success) return ec;
   if (opts.verbose)
     llvm::errs() << "  [6/7] transforms applied\n";
+
+  // If --emit mlir, dump MLIR before lowering and stop.
+  if (opts.emitKind == EmitKind::MLIR) {
+    if (opts.outputFile.empty()) {
+      mlirState->module->print(llvm::outs());
+    } else {
+      std::error_code fileEc;
+      llvm::raw_fd_ostream os(opts.outputFile, fileEc);
+      if (fileEc) {
+        llvm::errs() << "error: " << fileEc.message() << "\n";
+        return ExitCode::SystemError;
+      }
+      mlirState->module->print(os);
+    }
+    return ExitCode::Success;
+  }
 
   if ((ec = runCodeGen()) != ExitCode::Success) return ec;
   if (opts.verbose) {
