@@ -119,6 +119,7 @@ ExitCode Driver::run() {
   case Subcommand::Check:
     return runCheck();
   case Subcommand::Fmt:
+    return runFmt();
   case Subcommand::Doc:
   case Subcommand::Lsp:
     llvm::errs() << "error: subcommand not yet implemented\n";
@@ -201,6 +202,102 @@ ExitCode Driver::runCheck() {
     llvm::outs() << "check: no errors found\n";
 
   return diags->hasErrors() ? ExitCode::CompileError : ExitCode::Success;
+}
+
+ExitCode Driver::runFmt() {
+  // Load the source file.
+  diags = std::make_unique<DiagnosticEngine>(sourceManager);
+  sourceFileID = sourceManager.loadFile(opts.inputFile);
+  if (!sourceFileID.isValid()) {
+    llvm::errs() << "error: cannot open file '" << opts.inputFile << "'\n";
+    return ExitCode::SystemError;
+  }
+
+  // Re-lex into token stream.
+  Lexer lexer(sourceFileID, sourceManager, *diags);
+  std::string formatted;
+  llvm::raw_string_ostream out(formatted);
+
+  unsigned indent = 0;
+  bool needNewline = false;
+  bool lastWasNewline = true;
+
+  while (true) {
+    Token tok = lexer.lex();
+    if (tok.is(tok::eof))
+      break;
+
+    // Skip doc comments — re-emit them directly.
+    if (tok.is(tok::doc_line_comment) || tok.is(tok::doc_block_comment)) {
+      if (!lastWasNewline) out << "\n";
+      for (unsigned i = 0; i < indent; ++i) out << "  ";
+      out << tok.getSpelling() << "\n";
+      lastWasNewline = true;
+      continue;
+    }
+
+    // Handle closing braces — dedent before emitting.
+    if (tok.is(tok::r_brace)) {
+      if (indent > 0) --indent;
+      if (!lastWasNewline) out << "\n";
+      for (unsigned i = 0; i < indent; ++i) out << "  ";
+      out << "}";
+      needNewline = true;
+      lastWasNewline = false;
+      continue;
+    }
+
+    // If we need a newline (after ; or { or top-level decl keyword).
+    if (needNewline) {
+      out << "\n";
+      needNewline = false;
+      lastWasNewline = true;
+    }
+
+    // Indent at start of line.
+    if (lastWasNewline) {
+      for (unsigned i = 0; i < indent; ++i) out << "  ";
+      lastWasNewline = false;
+    }
+
+    // Emit the token.
+    // Add space before most tokens (except punctuation after identifiers).
+    if (!lastWasNewline && !tok.isOneOf(tok::comma, tok::semicolon,
+            tok::colon, tok::dot, tok::r_paren, tok::r_bracket,
+            tok::l_paren, tok::l_bracket)) {
+      out << " ";
+    }
+
+    out << tok.getSpelling();
+
+    // Handle opening braces — indent after.
+    if (tok.is(tok::l_brace)) {
+      ++indent;
+      needNewline = true;
+    }
+
+    if (tok.is(tok::semicolon))
+      needNewline = true;
+  }
+
+  if (!lastWasNewline)
+    out << "\n";
+
+  // Write to file or stdout.
+  if (opts.outputFile.empty()) {
+    // In-place: write back to input file.
+    std::error_code ec;
+    llvm::raw_fd_ostream fileOut(opts.inputFile, ec);
+    if (ec) {
+      llvm::errs() << "error: " << ec.message() << "\n";
+      return ExitCode::SystemError;
+    }
+    fileOut << formatted;
+  } else {
+    llvm::outs() << formatted;
+  }
+
+  return ExitCode::Success;
 }
 
 ExitCode Driver::loadSource() {

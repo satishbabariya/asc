@@ -71,6 +71,9 @@ private:
   /// Run the `check` subcommand: frontend + analysis only.
   ExitCode runCheck();
 
+  /// Run the `fmt` subcommand: format source file.
+  ExitCode runFmt();
+
   /// Stage 1: Load source file.
   ExitCode loadSource();
 
