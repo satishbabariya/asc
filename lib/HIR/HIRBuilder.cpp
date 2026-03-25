@@ -1029,25 +1029,128 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
   if (!scrutinee)
     return {};
 
-  // DECISION: Match lowered as a chain of scf.if comparisons for integer patterns.
-  // Full pattern matching with destructuring deferred.
+  // Determine if scrutinee is an enum (pointer to tagged union).
+  bool isEnumScrutinee = mlir::isa<mlir::LLVM::LLVMPointerType>(
+      scrutinee.getType());
+  mlir::Value discriminant;
+  if (isEnumScrutinee) {
+    // Load discriminant from offset 0 (i32 tag).
+    auto i32Ty = builder.getIntegerType(32);
+    discriminant = builder.create<mlir::LLVM::LoadOp>(location, i32Ty,
+                                                       scrutinee);
+  } else {
+    // Scrutinee is a scalar — use directly for comparison.
+    discriminant = scrutinee;
+  }
+
+  // Build a chain of if-else for each arm.
+  // Last arm result becomes the match result.
   mlir::Value result;
-  for (const auto &arm : e->getArms()) {
+  mlir::Value lastCond;
+
+  for (unsigned i = 0; i < e->getArms().size(); ++i) {
+    const auto &arm = e->getArms()[i];
     pushScope();
-    // For literal patterns, compare scrutinee to literal.
-    if (auto *litPat = dynamic_cast<LiteralPattern *>(arm.pattern)) {
-      mlir::Value patVal = visitExpr(litPat->getLiteral());
-      if (patVal && scrutinee) {
-        auto cond = builder.create<mlir::arith::CmpIOp>(
-            location, mlir::arith::CmpIPredicate::eq, scrutinee, patVal);
-        (void)cond; // Would branch here in full implementation.
+
+    bool isWildcard = dynamic_cast<WildcardPattern *>(arm.pattern) != nullptr;
+    bool isIdent = dynamic_cast<IdentPattern *>(arm.pattern) != nullptr;
+
+    if (isWildcard || isIdent) {
+      // Default arm — bind scrutinee and emit body.
+      if (isIdent) {
+        auto *ip = static_cast<IdentPattern *>(arm.pattern);
+        declare(ip->getName(), scrutinee);
       }
+      if (arm.guard) {
+        visitExpr(arm.guard);
+      }
+      result = visitExpr(arm.body);
+    } else if (auto *litPat = dynamic_cast<LiteralPattern *>(arm.pattern)) {
+      // Literal pattern — compare discriminant/scrutinee to literal.
+      mlir::Value patVal = visitExpr(litPat->getLiteral());
+      if (patVal && discriminant) {
+        // Ensure types match.
+        if (patVal.getType() != discriminant.getType() &&
+            discriminant.getType().isIntOrIndex() &&
+            patVal.getType().isIntOrIndex()) {
+          unsigned dstW = discriminant.getType().getIntOrFloatBitWidth();
+          unsigned srcW = patVal.getType().getIntOrFloatBitWidth();
+          if (srcW < dstW)
+            patVal = builder.create<mlir::arith::ExtSIOp>(location,
+                discriminant.getType(), patVal);
+          else if (srcW > dstW)
+            patVal = builder.create<mlir::arith::TruncIOp>(location,
+                discriminant.getType(), patVal);
+        }
+        lastCond = builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::eq, discriminant, patVal);
+      }
+      if (arm.guard) {
+        mlir::Value guardVal = visitExpr(arm.guard);
+        if (lastCond && guardVal)
+          lastCond = builder.create<mlir::arith::AndIOp>(location, lastCond,
+                                                          guardVal);
+      }
+      result = visitExpr(arm.body);
+    } else if (auto *enumPat = dynamic_cast<EnumPattern *>(arm.pattern)) {
+      // Enum pattern — compare discriminant to variant index.
+      const auto &path = enumPat->getPath();
+      // DECISION: Variant index is determined by order in enum declaration.
+      // Look up the enum and find the variant index.
+      int32_t variantIdx = -1;
+      if (path.size() >= 2) {
+        auto eit = sema.enumDecls.find(path[0]);
+        if (eit != sema.enumDecls.end()) {
+          for (unsigned vi = 0; vi < eit->second->getVariants().size(); ++vi) {
+            if (eit->second->getVariants()[vi]->getName() == path.back()) {
+              variantIdx = static_cast<int32_t>(vi);
+              break;
+            }
+          }
+        }
+      }
+      if (variantIdx >= 0 && discriminant) {
+        auto idxConst = builder.create<mlir::arith::ConstantIntOp>(
+            location, variantIdx, discriminant.getType());
+        lastCond = builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::eq, discriminant, idxConst);
+      }
+
+      // Bind payload arguments if present.
+      if (isEnumScrutinee && !enumPat->getArgs().empty()) {
+        auto ptrType = getPtrType();
+        auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(32), static_cast<int64_t>(0));
+        auto i32One = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(32), static_cast<int64_t>(1));
+        // GEP to payload (field 1 of the tagged union).
+        auto payloadPtr = builder.create<mlir::LLVM::GEPOp>(
+            location, ptrType, scrutinee.getType(), scrutinee,
+            mlir::ValueRange{i32Zero, i32One});
+        // Bind each payload arg as pattern variable.
+        for (auto *argPat : enumPat->getArgs()) {
+          if (auto *ip = dynamic_cast<IdentPattern *>(argPat)) {
+            // Load the payload value.
+            // DECISION: Assume single-field payload for now.
+            auto payloadVal = builder.create<mlir::LLVM::LoadOp>(
+                location, builder.getIntegerType(32), payloadPtr);
+            declare(ip->getName(), payloadVal);
+          }
+        }
+      }
+
+      if (arm.guard) {
+        mlir::Value guardVal = visitExpr(arm.guard);
+        if (lastCond && guardVal)
+          lastCond = builder.create<mlir::arith::AndIOp>(location, lastCond,
+                                                          guardVal);
+      }
+      result = visitExpr(arm.body);
+    } else {
+      // Fallback: just emit the body.
+      result = visitExpr(arm.body);
     }
-    // For identifier/wildcard patterns, bind the scrutinee.
-    if (auto *idPat = dynamic_cast<IdentPattern *>(arm.pattern)) {
-      declare(idPat->getName(), scrutinee);
-    }
-    result = visitExpr(arm.body);
+
     popScope();
   }
   return result;
@@ -1112,7 +1215,71 @@ mlir::Value HIRBuilder::visitTemplateLiteralExpr(TemplateLiteralExpr *) {
 mlir::Value HIRBuilder::visitTryExpr(TryExpr *e) {
   return visitExpr(e->getOperand());
 }
-mlir::Value HIRBuilder::visitPathExpr(PathExpr *) { return {}; }
+mlir::Value HIRBuilder::visitPathExpr(PathExpr *e) {
+  auto location = loc(e->getLocation());
+  const auto &segments = e->getSegments();
+  if (segments.empty())
+    return {};
+
+  // Check if this is an enum variant: EnumName::VariantName
+  if (segments.size() >= 2) {
+    auto eit = sema.enumDecls.find(segments[0]);
+    if (eit != sema.enumDecls.end()) {
+      EnumDecl *ed = eit->second;
+      // Find variant index.
+      int32_t variantIdx = -1;
+      EnumVariantDecl *variant = nullptr;
+      for (unsigned i = 0; i < ed->getVariants().size(); ++i) {
+        if (ed->getVariants()[i]->getName() == segments.back()) {
+          variantIdx = static_cast<int32_t>(i);
+          variant = ed->getVariants()[i];
+          break;
+        }
+      }
+      if (variantIdx >= 0) {
+        // Get the enum MLIR type.
+        auto *namedType = astCtx.create<NamedType>(
+            segments[0], std::vector<asc::Type *>{}, SourceLocation());
+        mlir::Type enumType = convertType(namedType);
+        auto ptrType = getPtrType();
+        auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(64), static_cast<int64_t>(1));
+
+        // Allocate enum on stack.
+        auto alloca = builder.create<mlir::LLVM::AllocaOp>(
+            location, ptrType, enumType, i64One);
+
+        // Store discriminant at offset 0.
+        auto i32Ty = builder.getIntegerType(32);
+        auto discVal = builder.create<mlir::arith::ConstantIntOp>(
+            location, variantIdx, i32Ty);
+        auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+            location, i32Ty, static_cast<int64_t>(0));
+        auto tagPtr = builder.create<mlir::LLVM::GEPOp>(
+            location, ptrType, enumType, alloca,
+            mlir::ValueRange{i32Zero, i32Zero});
+        builder.create<mlir::LLVM::StoreOp>(location, discVal, tagPtr);
+
+        return alloca;
+      }
+    }
+  }
+
+  // Check if this is a static method call: Type::method
+  if (segments.size() == 2) {
+    auto callee = module.lookupSymbol<mlir::func::FuncOp>(
+        segments[0] + "_" + segments[1]);
+    if (!callee) {
+      // Try without mangling.
+      callee = module.lookupSymbol<mlir::func::FuncOp>(segments[1]);
+    }
+    // DECISION: Path without call parens resolves to function reference.
+    // Actual calling happens in visitCallExpr.
+  }
+
+  // Look up as identifier.
+  return lookup(segments[0]);
+}
 mlir::Value HIRBuilder::visitParenExpr(ParenExpr *e) {
   return visitExpr(e->getInner());
 }
