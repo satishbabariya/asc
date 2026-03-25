@@ -93,14 +93,39 @@ void Sema::checkDecl(Decl *d) {
   case DeclKind::Var:
     checkVarDecl(static_cast<VarDecl *>(d));
     break;
-  case DeclKind::Const:
-  case DeclKind::Static:
+  case DeclKind::Const: {
+    auto *cd = static_cast<ConstDecl *>(d);
+    if (cd->getInit()) checkExpr(cd->getInit());
+    Symbol sym;
+    sym.name = cd->getName().str();
+    sym.decl = cd;
+    sym.type = cd->getType();
+    currentScope->declare(cd->getName(), std::move(sym));
+    break;
+  }
+  case DeclKind::Static: {
+    auto *sd = static_cast<StaticDecl *>(d);
+    if (sd->getInit()) checkExpr(sd->getInit());
+    Symbol sym;
+    sym.name = sd->getName().str();
+    sym.decl = sd;
+    sym.type = sd->getType();
+    sym.isMutable = sd->isMut();
+    currentScope->declare(sd->getName(), std::move(sym));
+    break;
+  }
   case DeclKind::TypeAlias:
   case DeclKind::Import:
-  case DeclKind::Export:
+    // DECISION: Import resolution handled in Driver (multi-file pipeline).
+    // At Sema level, imported symbols are already merged into scope by Driver.
+    break;
+  case DeclKind::Export: {
+    auto *ed = static_cast<ExportDecl *>(d);
+    if (ed->getInner()) checkDecl(ed->getInner());
+    break;
+  }
   case DeclKind::Field:
   case DeclKind::EnumVariant:
-    // Basic registration, no deep checking needed yet.
     break;
   }
 }
