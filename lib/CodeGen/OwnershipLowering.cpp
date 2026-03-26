@@ -5,6 +5,7 @@
 // API incompatibilities with lambda-based pattern registration.
 
 #include "asc/CodeGen/OwnershipLowering.h"
+#include "asc/HIR/OwnTypes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -111,6 +112,62 @@ struct OwnershipLoweringPass
         op->erase();
       }
     }
+
+    // --- Phase 2: Rewrite function and call signatures ---
+    // Any own-dialect types remaining in func.func signatures or
+    // func.call result types must be lowered to !llvm.ptr.
+    auto isOwnDialectType = [](mlir::Type t) -> bool {
+      return mlir::isa<own::OwnValType>(t) ||
+             mlir::isa<own::BorrowType>(t) ||
+             mlir::isa<own::BorrowMutType>(t) ||
+             mlir::isa<mlir::NoneType>(t);  // Self/void params
+    };
+
+    // Rewrite func.func signatures.
+    module.walk([&](mlir::func::FuncOp funcOp) {
+      auto funcType = funcOp.getFunctionType();
+      bool needsUpdate = false;
+
+      llvm::SmallVector<mlir::Type> newInputs;
+      for (auto t : funcType.getInputs()) {
+        if (isOwnDialectType(t)) {
+          newInputs.push_back(ptrType);
+          needsUpdate = true;
+        } else {
+          newInputs.push_back(t);
+        }
+      }
+
+      llvm::SmallVector<mlir::Type> newResults;
+      for (auto t : funcType.getResults()) {
+        if (isOwnDialectType(t)) {
+          newResults.push_back(ptrType);
+          needsUpdate = true;
+        } else {
+          newResults.push_back(t);
+        }
+      }
+
+      if (needsUpdate) {
+        auto newType = mlir::FunctionType::get(ctx, newInputs, newResults);
+        funcOp.setType(newType);
+        // Update block argument types to match.
+        if (!funcOp.isDeclaration()) {
+          for (unsigned i = 0; i < funcOp.getNumArguments(); ++i) {
+            if (isOwnDialectType(funcOp.getArgument(i).getType()))
+              funcOp.getArgument(i).setType(ptrType);
+          }
+        }
+      }
+    });
+
+    // Rewrite func.call result types.
+    module.walk([&](mlir::func::CallOp callOp) {
+      for (unsigned i = 0; i < callOp.getNumResults(); ++i) {
+        if (isOwnDialectType(callOp.getResult(i).getType()))
+          callOp.getResult(i).setType(ptrType);
+      }
+    });
   }
 };
 
