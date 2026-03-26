@@ -166,6 +166,13 @@ private:
   /// Current function being built (for return type info).
   mlir::func::FuncOp currentFunction;
 
+  /// Loop context for break/continue support.
+  struct LoopContext {
+    mlir::Block *continueBlock; // target for 'continue' (condBlock or bodyBlock)
+    mlir::Block *exitBlock;     // target for 'break'
+  };
+  std::vector<LoopContext> loopStack;
+
   /// Cache of MLIR struct types by name to avoid re-creation.
   llvm::StringMap<mlir::Type> structTypeCache;
 

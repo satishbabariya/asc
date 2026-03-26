@@ -318,20 +318,55 @@ Expr *Parser::parsePrimaryExpr() {
     return ctx.create<TemplateLiteralExpr>(std::move(parts), loc);
   }
 
-  // Parenthesized expression or tuple literal.
+  // Parenthesized expression, tuple literal, or closure.
   if (tok.is(tok::l_paren)) {
     advance();
+
+    // () => body — empty closure or empty tuple.
     if (tok.is(tok::r_paren)) {
       advance();
-      // Empty tuple.
+      if (tok.is(tok::fat_arrow)) {
+        return parseClosureExpr();
+      }
       return ctx.create<TupleLiteral>(std::vector<Expr *>{}, loc);
     }
 
-    // Check for closure: (params) => body
-    // Heuristic: if we see `identifier :` or `)` followed by `=>`, it's a closure.
-    // DECISION: Try to parse as expression first; if we see `) =>`, reparse as closure.
-    // For simplicity, we peek ahead.
-    // Simple approach: parse expression, check for comma (tuple) or ) => (closure).
+    // Detect typed closure: (identifier : type, ...) => body
+    // Heuristic: if current is identifier and next is ':', it's a typed closure.
+    bool isTypedClosure = tok.is(tok::identifier) && lexer.peek().is(tok::colon);
+    if (isTypedClosure) {
+      // Parse closure parameter list.
+      std::vector<ClosureParam> params;
+      while (!tok.is(tok::r_paren) && !tok.is(tok::eof)) {
+        std::string pname;
+        if (tok.is(tok::identifier)) {
+          pname = tok.getSpelling().str();
+          advance();
+        }
+        expect(tok::colon);
+        Type *ptype = parseType();
+        params.push_back({std::move(pname), ptype});
+        if (!consume(tok::comma))
+          break;
+      }
+      expect(tok::r_paren);
+      // Optional return type: ): retType =>
+      Type *retType = nullptr;
+      if (tok.is(tok::colon)) {
+        advance();
+        retType = parseType();
+      }
+      expect(tok::fat_arrow);
+      Expr *body = nullptr;
+      if (tok.is(tok::l_brace)) {
+        body = parseBlockExpr();
+      } else {
+        body = parseExpr();
+      }
+      return ctx.create<ClosureExpr>(std::move(params), retType, body, loc);
+    }
+
+    // Not a typed closure — parse as expression.
     Expr *first = parseExpr();
     if (tok.is(tok::comma)) {
       // Tuple literal.
@@ -349,7 +384,7 @@ Expr *Parser::parsePrimaryExpr() {
 
     // Check for arrow function: (expr) => body
     if (tok.is(tok::fat_arrow)) {
-      return parseClosureExpr(); // handled below
+      return parseClosureExpr();
     }
 
     return ctx.create<ParenExpr>(first, loc);

@@ -1,5 +1,6 @@
 #include "asc/HIR/HIRBuilder.h"
 #include "asc/Basic/SourceManager.h"
+#include "llvm/ADT/StringSet.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -499,8 +500,35 @@ mlir::Value HIRBuilder::visitReturnStmt(ReturnStmt *s) {
   return {};
 }
 
-mlir::Value HIRBuilder::visitBreakStmt(BreakStmt *) { return {}; }
-mlir::Value HIRBuilder::visitContinueStmt(ContinueStmt *) { return {}; }
+mlir::Value HIRBuilder::visitBreakStmt(BreakStmt *s) {
+  if (loopStack.empty())
+    return {};
+  auto location = loc(s->getLocation());
+  builder.create<mlir::cf::BranchOp>(location, loopStack.back().exitBlock);
+  // Create dead block for any code after break; add unreachable terminator.
+  auto *deadBlock = new mlir::Block();
+  builder.getBlock()->getParent()->getBlocks().insertAfter(
+      mlir::Region::iterator(builder.getBlock()), deadBlock);
+  builder.setInsertionPointToStart(deadBlock);
+  builder.create<mlir::LLVM::UnreachableOp>(location);
+  // Move insertion to start so subsequent stmts insert before unreachable.
+  builder.setInsertionPointToStart(deadBlock);
+  return {};
+}
+mlir::Value HIRBuilder::visitContinueStmt(ContinueStmt *s) {
+  if (loopStack.empty())
+    return {};
+  auto location = loc(s->getLocation());
+  builder.create<mlir::cf::BranchOp>(location, loopStack.back().continueBlock);
+  // Create dead block for any code after continue; add unreachable terminator.
+  auto *deadBlock = new mlir::Block();
+  builder.getBlock()->getParent()->getBlocks().insertAfter(
+      mlir::Region::iterator(builder.getBlock()), deadBlock);
+  builder.setInsertionPointToStart(deadBlock);
+  builder.create<mlir::LLVM::UnreachableOp>(location);
+  builder.setInsertionPointToStart(deadBlock);
+  return {};
+}
 mlir::Value HIRBuilder::visitItemStmt(ItemStmt *s) {
   visitDecl(s->getDecl());
   return {};
@@ -606,12 +634,58 @@ mlir::Value HIRBuilder::visitDeclRefExpr(DeclRefExpr *e) {
   return val;
 }
 
+static bool isStringType(asc::Type *t) {
+  if (!t) return false;
+  if (auto *nt = dynamic_cast<NamedType *>(t))
+    return nt->getName() == "String" || nt->getName() == "str";
+  return false;
+}
+
 mlir::Value HIRBuilder::visitBinaryExpr(BinaryExpr *e) {
   auto location = loc(e->getLocation());
   mlir::Value lhs = visitExpr(e->getLHS());
   mlir::Value rhs = visitExpr(e->getRHS());
   if (!lhs || !rhs)
     return {};
+
+  // String operations: ==, !=, + via runtime calls.
+  bool lhsIsString = isStringType(e->getLHS()->getType());
+  bool rhsIsString = isStringType(e->getRHS()->getType());
+  if (lhsIsString && rhsIsString) {
+    auto ptrType = getPtrType();
+    auto i32Type = builder.getIntegerType(32);
+    if (e->getOp() == BinaryOp::Eq || e->getOp() == BinaryOp::Ne) {
+      auto funcType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType});
+      if (!module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_eq")) {
+        auto savedIP = builder.saveInsertionPoint();
+        builder.setInsertionPointToStart(module.getBody());
+        builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_eq", funcType);
+        builder.restoreInsertionPoint(savedIP);
+      }
+      auto result = builder.create<mlir::LLVM::CallOp>(
+          location, funcType, "__asc_string_eq", mlir::ValueRange{lhs, rhs});
+      auto eqVal = result.getResult();
+      auto zero = builder.create<mlir::arith::ConstantIntOp>(location, 0, i32Type);
+      if (e->getOp() == BinaryOp::Eq)
+        return builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::ne, eqVal, zero);
+      else
+        return builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::eq, eqVal, zero);
+    }
+    if (e->getOp() == BinaryOp::Add) {
+      auto funcType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, ptrType});
+      if (!module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_concat")) {
+        auto savedIP = builder.saveInsertionPoint();
+        builder.setInsertionPointToStart(module.getBody());
+        builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_concat", funcType);
+        builder.restoreInsertionPoint(savedIP);
+      }
+      auto result = builder.create<mlir::LLVM::CallOp>(
+          location, funcType, "__asc_string_concat", mlir::ValueRange{lhs, rhs});
+      return result.getResult();
+    }
+  }
 
   bool isFloat = lhs.getType().isa<mlir::FloatType>();
 
@@ -1129,15 +1203,43 @@ mlir::Value HIRBuilder::visitAssignExpr(AssignExpr *e) {
 }
 
 mlir::Value HIRBuilder::visitArrayLiteral(ArrayLiteral *e) {
-  // DECISION: Arrays lowered as a sequence of stores into an alloca for now.
-  // Full array type support requires memref dialect integration.
+  auto location = loc(e->getLocation());
   llvm::SmallVector<mlir::Value> elements;
   for (auto *elem : e->getElements()) {
     mlir::Value v = visitExpr(elem);
     if (v)
       elements.push_back(v);
   }
-  return elements.empty() ? mlir::Value{} : elements.back();
+  if (elements.empty())
+    return {};
+
+  // Determine element type from first element.
+  auto elemType = elements[0].getType();
+  unsigned numElems = elements.size();
+
+  // Create array type and alloca.
+  auto arrayType = mlir::LLVM::LLVMArrayType::get(elemType, numElems);
+  auto ptrType = getPtrType();
+  auto i64Type = builder.getIntegerType(64);
+  auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+      location, i64Type, static_cast<int64_t>(1));
+  auto arrayAlloca = builder.create<mlir::LLVM::AllocaOp>(
+      location, ptrType, arrayType, i64One);
+
+  // Store each element via GEP.
+  auto i32Type = builder.getIntegerType(32);
+  auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+      location, i32Type, static_cast<int64_t>(0));
+  for (unsigned i = 0; i < numElems; ++i) {
+    auto idx = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Type, static_cast<int64_t>(i));
+    auto elemPtr = builder.create<mlir::LLVM::GEPOp>(
+        location, ptrType, arrayType, arrayAlloca,
+        mlir::ValueRange{i32Zero, idx});
+    builder.create<mlir::LLVM::StoreOp>(location, elements[i], elemPtr);
+  }
+
+  return arrayAlloca;
 }
 
 mlir::Value HIRBuilder::visitStructLiteral(StructLiteral *e) {
@@ -1546,16 +1648,31 @@ mlir::Value HIRBuilder::visitIndexExpr(IndexExpr *e) {
   // Determine element type from AST.
   asc::Type *baseAstType = e->getBase()->getType();
   mlir::Type elemMLIRType;
-  if (auto *at = dynamic_cast<ArrayType *>(baseAstType))
+  unsigned arraySize = 0;
+  if (auto *at = dynamic_cast<ArrayType *>(baseAstType)) {
     elemMLIRType = convertType(at->getElementType());
-  else if (auto *st = dynamic_cast<SliceType *>(baseAstType))
+    arraySize = at->getSize();
+  } else if (auto *st = dynamic_cast<SliceType *>(baseAstType)) {
     elemMLIRType = convertType(st->getElementType());
-  else
+  } else {
     elemMLIRType = builder.getIntegerType(32); // fallback
+  }
 
   // If base is a pointer, GEP with index and load.
   if (mlir::isa<mlir::LLVM::LLVMPointerType>(base.getType())) {
     auto ptrType = getPtrType();
+    if (arraySize > 0) {
+      // Array pointer: GEP with [0, index] into [N x elemType].
+      auto arrayType = mlir::LLVM::LLVMArrayType::get(elemMLIRType, arraySize);
+      auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(32), static_cast<int64_t>(0));
+      auto elemPtr = builder.create<mlir::LLVM::GEPOp>(
+          location, ptrType, arrayType, base,
+          mlir::ValueRange{i32Zero, index});
+      return builder.create<mlir::LLVM::LoadOp>(location, elemMLIRType,
+                                                 elemPtr);
+    }
+    // Flat pointer: GEP with just index.
     auto elemPtr = builder.create<mlir::LLVM::GEPOp>(
         location, ptrType, elemMLIRType, base, mlir::ValueRange{index});
     return builder.create<mlir::LLVM::LoadOp>(location, elemMLIRType, elemPtr);
@@ -1603,11 +1720,62 @@ mlir::Value HIRBuilder::visitCastExpr(CastExpr *e) {
   return operand;
 }
 
+// Collect all DeclRefExpr names from an expression tree.
+static void collectFreeVars(Expr *expr, llvm::StringSet<> &paramNames,
+                            llvm::StringSet<> &freeVars) {
+  if (!expr)
+    return;
+  if (auto *ref = dynamic_cast<DeclRefExpr *>(expr)) {
+    if (!paramNames.contains(ref->getName()))
+      freeVars.insert(ref->getName());
+    return;
+  }
+  if (auto *bin = dynamic_cast<BinaryExpr *>(expr)) {
+    collectFreeVars(bin->getLHS(), paramNames, freeVars);
+    collectFreeVars(bin->getRHS(), paramNames, freeVars);
+    return;
+  }
+  if (auto *un = dynamic_cast<UnaryExpr *>(expr)) {
+    collectFreeVars(un->getOperand(), paramNames, freeVars);
+    return;
+  }
+  if (auto *call = dynamic_cast<CallExpr *>(expr)) {
+    collectFreeVars(call->getCallee(), paramNames, freeVars);
+    for (auto *arg : call->getArgs())
+      collectFreeVars(arg, paramNames, freeVars);
+    return;
+  }
+  if (auto *ifE = dynamic_cast<IfExpr *>(expr)) {
+    collectFreeVars(ifE->getCondition(), paramNames, freeVars);
+    if (ifE->getThenBlock()) {
+      for (auto *stmt : ifE->getThenBlock()->getStmts()) {
+        if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
+          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
+      }
+    }
+    return;
+  }
+  if (auto *block = dynamic_cast<BlockExpr *>(expr)) {
+    if (block->getBlock()) {
+      for (auto *stmt : block->getBlock()->getStmts()) {
+        if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
+          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
+      }
+    }
+    return;
+  }
+  if (auto *paren = dynamic_cast<ParenExpr *>(expr)) {
+    collectFreeVars(paren->getInner(), paramNames, freeVars);
+    return;
+  }
+  // For other expression types, the current level of capture analysis
+  // is sufficient — if more complex closures are needed, extend here.
+}
+
 mlir::Value HIRBuilder::visitClosureExpr(ClosureExpr *e) {
   auto location = loc(e->getLocation());
 
   // --- Capture analysis ---
-  // Walk closure body to find references to outer-scope variables.
   struct CaptureInfo {
     std::string name;
     mlir::Value outerVal;
@@ -1615,20 +1783,67 @@ mlir::Value HIRBuilder::visitClosureExpr(ClosureExpr *e) {
   };
   llvm::SmallVector<CaptureInfo> captures;
 
-  // DECISION: Simple capture analysis — check all params declared in
-  // outer scopes. A full analysis would walk the AST; for now we capture
-  // any outer variable that the closure's params don't shadow.
-  // This is conservative but correct for single-level closures.
+  // Collect free variable names from the closure body.
+  llvm::StringSet<> paramNames;
+  for (const auto &param : e->getParams())
+    paramNames.insert(param.name);
+  llvm::StringSet<> freeVarNames;
+  collectFreeVars(e->getBody(), paramNames, freeVarNames);
+
+  // Resolve each free variable from the current scope.
+  // For alloca-backed mutable variables, load the value before capturing.
+  for (auto &entry : freeVarNames) {
+    llvm::StringRef varName = entry.getKey();
+    mlir::Value outerVal = lookup(varName);
+    if (outerVal) {
+      // If this is an alloca-backed mutable variable, load its current value.
+      if (mlir::isa<mlir::LLVM::LLVMPointerType>(outerVal.getType())) {
+        auto *defOp = outerVal.getDefiningOp();
+        if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
+          auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
+          mlir::Type elemType = allocaOp.getElemType();
+          if (elemType && (elemType.isIntOrIndexOrFloat() ||
+              mlir::isa<mlir::LLVM::LLVMPointerType>(elemType))) {
+            outerVal = builder.create<mlir::LLVM::LoadOp>(
+                location, elemType, outerVal);
+          }
+        }
+      }
+      captures.push_back(
+          {varName.str(), outerVal, outerVal.getType()});
+    }
+  }
 
   // --- Build closure function ---
   static unsigned closureCounter = 0;
   std::string closureName = "__closure_" + std::to_string(closureCounter++);
   std::string closureFnName = closureName + "_fn";
 
-  // Build parameter types: closure_ptr + user params.
-  llvm::SmallVector<mlir::Type> paramTypes;
   auto ptrType = getPtrType();
-  paramTypes.push_back(ptrType); // closure struct pointer
+
+  // For closures with captures, use module-level globals to pass captured values.
+  // This avoids the calling convention mismatch where callers don't know about
+  // the closure struct. Each capture gets a unique global variable.
+  struct CaptureGlobal {
+    std::string globalName;
+    mlir::Type type;
+  };
+  llvm::SmallVector<CaptureGlobal> captureGlobals;
+  for (unsigned i = 0; i < captures.size(); ++i) {
+    std::string gname = closureName + "_cap_" + std::to_string(i);
+    captureGlobals.push_back({gname, captures[i].type});
+
+    // Create module-level global for this capture.
+    auto savedIP = builder.saveInsertionPoint();
+    builder.setInsertionPointToStart(module.getBody());
+    builder.create<mlir::LLVM::GlobalOp>(
+        location, captures[i].type, /*isConstant=*/false,
+        mlir::LLVM::Linkage::Internal, gname, mlir::Attribute{});
+    builder.restoreInsertionPoint(savedIP);
+  }
+
+  // Build parameter types: just user params (no closure_ptr).
+  llvm::SmallVector<mlir::Type> paramTypes;
   for (const auto &param : e->getParams()) {
     mlir::Type pType = param.type ? convertType(param.type)
                                   : builder.getIntegerType(32);
@@ -1655,10 +1870,19 @@ mlir::Value HIRBuilder::visitClosureExpr(ClosureExpr *e) {
   builder.setInsertionPointToStart(&entryBlock);
 
   pushScope();
-  // Bind user parameters (skip closure_ptr at index 0).
+  // Bind user parameters.
   for (unsigned i = 0; i < e->getParams().size(); ++i) {
     if (!e->getParams()[i].name.empty())
-      declare(e->getParams()[i].name, entryBlock.getArgument(i + 1));
+      declare(e->getParams()[i].name, entryBlock.getArgument(i));
+  }
+
+  // Load captures from globals and declare them in scope.
+  for (unsigned i = 0; i < captures.size(); ++i) {
+    auto globalAddr = builder.create<mlir::LLVM::AddressOfOp>(
+        location, ptrType, captureGlobals[i].globalName);
+    auto loadedVal = builder.create<mlir::LLVM::LoadOp>(
+        location, captures[i].type, globalAddr);
+    declare(captures[i].name, loadedVal);
   }
 
   mlir::Value bodyResult = visitExpr(e->getBody());
@@ -1679,29 +1903,17 @@ mlir::Value HIRBuilder::visitClosureExpr(ClosureExpr *e) {
   // Restore insertion point.
   builder.restoreInsertionPoint(savedInsertionPoint);
 
-  // --- Allocate closure struct ---
-  // Layout: { fn_ptr: ptr, captures... }
-  auto i64Type = builder.getIntegerType(64);
-  auto i64One = builder.create<mlir::LLVM::ConstantOp>(
-      location, i64Type, static_cast<int64_t>(1));
-  // DECISION: Closure struct is just { ptr } for now (no captures stored).
-  // Full capture storage requires walking the AST to find free variables.
-  auto closureStructType =
-      mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrType});
-  auto closureAlloca = builder.create<mlir::LLVM::AllocaOp>(
-      location, ptrType, closureStructType, i64One);
+  // Store captured values into globals before the closure is used.
+  for (unsigned i = 0; i < captures.size(); ++i) {
+    auto globalAddr = builder.create<mlir::LLVM::AddressOfOp>(
+        location, ptrType, captureGlobals[i].globalName);
+    builder.create<mlir::LLVM::StoreOp>(location, captures[i].outerVal,
+                                         globalAddr);
+  }
 
-  // Store function pointer.
-  auto fnAddr = builder.create<mlir::LLVM::AddressOfOp>(
+  // Return the function address directly (compatible with function pointer calls).
+  return builder.create<mlir::LLVM::AddressOfOp>(
       location, ptrType, closureFnName);
-  auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
-      location, builder.getIntegerType(32), static_cast<int64_t>(0));
-  auto fnSlot = builder.create<mlir::LLVM::GEPOp>(
-      location, ptrType, closureStructType, closureAlloca,
-      mlir::ValueRange{i32Zero, i32Zero});
-  builder.create<mlir::LLVM::StoreOp>(location, fnAddr, fnSlot);
-
-  return closureAlloca;
 }
 
 mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
@@ -1967,12 +2179,37 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
 
 mlir::Value HIRBuilder::visitLoopExpr(LoopExpr *e) {
   auto location = loc(e->getLocation());
-  // DECISION: Loop emitted as scf.while with always-true condition.
+
+  auto *currentBlock = builder.getBlock();
+  auto *parentRegion = currentBlock->getParent();
+
+  auto *bodyBlock = new mlir::Block();
+  auto *exitBlock = new mlir::Block();
+
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(currentBlock), bodyBlock);
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(bodyBlock), exitBlock);
+
+  // Branch to body block.
+  builder.create<mlir::cf::BranchOp>(location, bodyBlock);
+
+  // Body block: execute body, unconditional back-edge.
+  builder.setInsertionPointToStart(bodyBlock);
+  loopStack.push_back({bodyBlock, exitBlock});
   pushScope();
   if (e->getBody())
     visitCompoundStmt(e->getBody());
   popScope();
-  (void)location;
+  loopStack.pop_back();
+
+  auto *currentBodyEnd = builder.getBlock();
+  if (currentBodyEnd->empty() ||
+      !currentBodyEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
+    builder.create<mlir::cf::BranchOp>(location, bodyBlock);
+
+  // Continue in exit block.
+  builder.setInsertionPointToStart(exitBlock);
   return {};
 }
 
@@ -2015,10 +2252,12 @@ mlir::Value HIRBuilder::visitWhileExpr(WhileExpr *e) {
 
   // Body block: execute body, branch back to condition.
   builder.setInsertionPointToStart(bodyBlock);
+  loopStack.push_back({condBlock, exitBlock});
   pushScope();
   if (e->getBody())
     visitCompoundStmt(e->getBody());
   popScope();
+  loopStack.pop_back();
   // After body statements, the insertion point may be in a different block
   // (e.g., if the body contains if/else which created merge blocks).
   // Add back-edge from whatever block we're in now.
@@ -2034,7 +2273,115 @@ mlir::Value HIRBuilder::visitWhileExpr(WhileExpr *e) {
 
 mlir::Value HIRBuilder::visitForExpr(ForExpr *e) {
   auto location = loc(e->getLocation());
-  // Emit iterable.
+
+  // Check if iterable is a range expression (BinaryExpr with Range op).
+  auto *binaryRange = dynamic_cast<BinaryExpr *>(e->getIterable());
+  bool isRange = binaryRange &&
+                 (binaryRange->getOp() == BinaryOp::Range ||
+                  binaryRange->getOp() == BinaryOp::RangeInclusive);
+  // Also check for RangeExpr (alternative AST representation).
+  auto *rangeExpr = dynamic_cast<RangeExpr *>(e->getIterable());
+  if (isRange || rangeExpr) {
+    mlir::Value startVal, endVal;
+    bool inclusive = false;
+    if (binaryRange && isRange) {
+      startVal = visitExpr(binaryRange->getLHS());
+      endVal = visitExpr(binaryRange->getRHS());
+      inclusive = binaryRange->getOp() == BinaryOp::RangeInclusive;
+    } else {
+      startVal = rangeExpr->getStart()
+                     ? visitExpr(rangeExpr->getStart())
+                     : builder.create<mlir::arith::ConstantIntOp>(
+                           location, 0, builder.getIntegerType(32));
+      endVal = rangeExpr->getEnd()
+                   ? visitExpr(rangeExpr->getEnd())
+                   : builder.create<mlir::arith::ConstantIntOp>(
+                         location, 0, builder.getIntegerType(32));
+      inclusive = rangeExpr->isInclusive();
+    }
+
+    // Alloca counter variable.
+    auto i32Type = builder.getIntegerType(32);
+    auto i64Type = builder.getIntegerType(64);
+    auto ptrType = getPtrType();
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, i64Type, static_cast<int64_t>(1));
+    auto counterAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, i32Type, i64One);
+    builder.create<mlir::LLVM::StoreOp>(location, startVal, counterAlloca);
+
+    // Create loop blocks: cond → body → incr → cond, break → exit
+    auto *currentBlock = builder.getBlock();
+    auto *parentRegion = currentBlock->getParent();
+
+    auto *condBlock = new mlir::Block();
+    auto *bodyBlock = new mlir::Block();
+    auto *incrBlock = new mlir::Block();
+    auto *exitBlock = new mlir::Block();
+
+    parentRegion->getBlocks().insertAfter(
+        mlir::Region::iterator(currentBlock), condBlock);
+    parentRegion->getBlocks().insertAfter(
+        mlir::Region::iterator(condBlock), bodyBlock);
+    parentRegion->getBlocks().insertAfter(
+        mlir::Region::iterator(bodyBlock), incrBlock);
+    parentRegion->getBlocks().insertAfter(
+        mlir::Region::iterator(incrBlock), exitBlock);
+
+    // Branch to condition block.
+    builder.create<mlir::cf::BranchOp>(location, condBlock);
+
+    // Condition block: load counter, compare with end.
+    builder.setInsertionPointToStart(condBlock);
+    auto counterVal = builder.create<mlir::LLVM::LoadOp>(
+        location, i32Type, counterAlloca);
+    auto cmpPred = inclusive ? mlir::arith::CmpIPredicate::sle
+                             : mlir::arith::CmpIPredicate::slt;
+    auto cond = builder.create<mlir::arith::CmpIOp>(
+        location, cmpPred, counterVal, endVal);
+    builder.create<mlir::cf::CondBranchOp>(location, cond, bodyBlock,
+                                            mlir::ValueRange{}, exitBlock,
+                                            mlir::ValueRange{});
+
+    // Body block: bind loop variable, execute body.
+    // Continue targets incrBlock (not condBlock) so counter gets incremented.
+    builder.setInsertionPointToStart(bodyBlock);
+    loopStack.push_back({incrBlock, exitBlock});
+    pushScope();
+    auto loopVar = builder.create<mlir::LLVM::LoadOp>(
+        location, i32Type, counterAlloca);
+    if (!e->getVarName().empty())
+      declare(e->getVarName(), loopVar);
+
+    if (e->getBody())
+      visitCompoundStmt(e->getBody());
+    popScope();
+    loopStack.pop_back();
+
+    // Branch from body end to increment block.
+    auto *currentBodyEnd = builder.getBlock();
+    if (currentBodyEnd->empty() ||
+        !currentBodyEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      builder.create<mlir::cf::BranchOp>(location, incrBlock);
+
+    // Increment block: increment counter, branch to condition.
+    builder.setInsertionPointToStart(incrBlock);
+    auto curCounter = builder.create<mlir::LLVM::LoadOp>(
+        location, i32Type, counterAlloca);
+    auto one = builder.create<mlir::arith::ConstantIntOp>(location, 1,
+                                                           i32Type);
+    auto incremented =
+        builder.create<mlir::arith::AddIOp>(location, curCounter, one);
+    builder.create<mlir::LLVM::StoreOp>(location, incremented,
+                                         counterAlloca);
+    builder.create<mlir::cf::BranchOp>(location, condBlock);
+
+    // Continue after loop.
+    builder.setInsertionPointToStart(exitBlock);
+    return {};
+  }
+
+  // Fallback: non-range iterable — just bind and visit once.
   mlir::Value iterable = visitExpr(e->getIterable());
   pushScope();
   if (iterable && !e->getVarName().empty())
@@ -2042,7 +2389,6 @@ mlir::Value HIRBuilder::visitForExpr(ForExpr *e) {
   if (e->getBody())
     visitCompoundStmt(e->getBody());
   popScope();
-  (void)location;
   return {};
 }
 

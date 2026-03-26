@@ -83,6 +83,25 @@ int __asc_string_eq_str(AscString *s, const char *data, unsigned long len) {
   return memcmp(s->ptr, data, len) == 0;
 }
 
+// Concatenate two strings into a new string.
+AscString *__asc_string_concat(AscString *a, AscString *b) {
+  unsigned long total = (a ? a->len : 0) + (b ? b->len : 0);
+  AscString *s = (AscString *)malloc(sizeof(AscString));
+  unsigned long cap = total < 8 ? 8 : total;
+  s->ptr = (char *)malloc(cap);
+  s->len = total;
+  s->cap = cap;
+  unsigned long offset = 0;
+  if (a && a->len > 0) {
+    memcpy(s->ptr, a->ptr, a->len);
+    offset = a->len;
+  }
+  if (b && b->len > 0) {
+    memcpy(s->ptr + offset, b->ptr, b->len);
+  }
+  return s;
+}
+
 // Free a string.
 void __asc_string_free(AscString *s) {
   if (s) {
