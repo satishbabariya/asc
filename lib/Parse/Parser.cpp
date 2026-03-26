@@ -253,6 +253,12 @@ Type *Parser::parsePrimaryType() {
       }
     }
     expect(tok::r_paren);
+    // Check for function type: (T1, T2) -> ReturnType
+    if (tok.is(tok::arrow)) {
+      advance();
+      Type *retType = parseType();
+      return ctx.create<FunctionType>(std::move(elements), retType, loc);
+    }
     if (elements.size() == 1)
       return elements[0]; // grouped, not tuple
     return ctx.create<TupleType>(std::move(elements), loc);

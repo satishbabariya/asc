@@ -218,15 +218,9 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
     return getPtrType();
   }
 
-  // Function type.
+  // Function type → pointer (function pointers / closures are pointers at runtime).
   if (auto *ft = dynamic_cast<FunctionType *>(astType)) {
-    llvm::SmallVector<mlir::Type> params;
-    for (auto *p : ft->getParamTypes())
-      params.push_back(convertType(p));
-    mlir::Type ret = convertType(ft->getReturnType());
-    return builder.getFunctionType(params, ret.isa<mlir::NoneType>()
-                                              ? mlir::TypeRange()
-                                              : mlir::TypeRange(ret));
+    return getPtrType();
   }
 
   // Nullable type → same as Option (tagged union).
@@ -576,7 +570,15 @@ mlir::Value HIRBuilder::visitNullLiteral(NullLiteral *) { return {}; }
 
 mlir::Value HIRBuilder::visitDeclRefExpr(DeclRefExpr *e) {
   mlir::Value val = lookup(e->getName());
-  if (!val) return {};
+  if (!val) {
+    // If not in scope, check if it's a known function → emit addressof.
+    auto funcOp = module.lookupSymbol<mlir::func::FuncOp>(e->getName());
+    if (funcOp) {
+      return builder.create<mlir::LLVM::AddressOfOp>(
+          builder.getUnknownLoc(), getPtrType(), e->getName());
+    }
+    return {};
+  }
 
   // If this is a mutable variable stored in alloca (pointer to scalar),
   // load the current value. We detect alloca-backed vars by checking if
@@ -853,6 +855,40 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
   if (callee) {
     auto callOp = builder.create<mlir::func::CallOp>(location, callee, args);
     return callOp.getNumResults() > 0 ? callOp.getResult(0) : mlir::Value{};
+  }
+
+  // Check if callee is a local variable (function pointer / closure).
+  // This handles: apply(f, x) where f is a parameter of function type.
+  if (!calleeName.empty()) {
+    mlir::Value calleeVal = lookup(calleeName);
+    if (calleeVal && mlir::isa<mlir::LLVM::LLVMPointerType>(calleeVal.getType())) {
+      // Indirect call through function pointer.
+      // Determine return type from Sema.
+      mlir::Type retType = builder.getIntegerType(32); // default
+      if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getCallee())) {
+        if (ref->getResolvedDecl()) {
+          // Check the parameter's AST type for return info.
+        }
+        // Try the expression type from Sema.
+        if (e->getType()) {
+          retType = convertType(e->getType());
+          if (retType.isa<mlir::NoneType>()) retType = mlir::Type();
+        }
+      }
+
+      // Emit indirect call via LLVM CallOp.
+      llvm::SmallVector<mlir::Type> resTypes;
+      if (retType && !retType.isa<mlir::NoneType>())
+        resTypes.push_back(retType);
+
+      // Build the call operation using OperationState.
+      mlir::OperationState callState(location, "llvm.call");
+      callState.addOperands(calleeVal);
+      callState.addOperands(args);
+      callState.addTypes(resTypes);
+      auto *callOp = builder.create(callState);
+      return callOp->getNumResults() > 0 ? callOp->getResult(0) : mlir::Value{};
+    }
   }
 
   // Forward declaration: emit only if not already in module.
