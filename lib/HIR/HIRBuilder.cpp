@@ -697,8 +697,32 @@ mlir::Value HIRBuilder::visitUnaryExpr(UnaryExpr *e) {
         location, -1, operand.getType());
     return builder.create<mlir::arith::XOrIOp>(location, operand, allOnes);
   }
-  case UnaryOp::AddrOf:
+  case UnaryOp::AddrOf: {
+    // For &c where c is a mutable variable backed by alloca:
+    // - If alloca holds a scalar: return the alloca pointer
+    // - If alloca holds a pointer (struct): load the pointer from alloca
+    if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getOperand())) {
+      mlir::Value rawPtr = lookup(ref->getName());
+      if (rawPtr && mlir::isa<mlir::LLVM::LLVMPointerType>(rawPtr.getType())) {
+        auto *defOp = rawPtr.getDefiningOp();
+        if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
+          auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
+          mlir::Type elemType = allocaOp.getElemType();
+          // If alloca holds a pointer (struct ref), load the inner pointer.
+          if (elemType && mlir::isa<mlir::LLVM::LLVMPointerType>(elemType)) {
+            return builder.create<mlir::LLVM::LoadOp>(location, elemType,
+                                                       rawPtr);
+          }
+          // Otherwise return the alloca pointer itself (scalar addr).
+          return rawPtr;
+        }
+        return rawPtr;
+      }
+    }
+    if (mlir::isa<mlir::LLVM::LLVMPointerType>(operand.getType()))
+      return operand;
     return emitBorrowRef(operand, location);
+  }
   case UnaryOp::Deref:
     return operand; // Deref lowers to pointer load in codegen.
   }
@@ -969,6 +993,65 @@ mlir::Value HIRBuilder::visitAssignExpr(AssignExpr *e) {
       return {};
     }
   }
+  // Field assignment: c.value = x (store through pointer).
+  if (auto *fieldAccess = dynamic_cast<FieldAccessExpr *>(e->getTarget())) {
+    // Get the base pointer WITHOUT loading the struct value.
+    // We need the pointer, not the loaded value.
+    mlir::Value basePtr;
+    if (auto *baseRef = dynamic_cast<DeclRefExpr *>(fieldAccess->getBase())) {
+      basePtr = lookup(baseRef->getName());
+      // If it's an alloca for a pointer (e.g., refmut param), load the pointer.
+      if (basePtr) {
+        auto *defOp = basePtr.getDefiningOp();
+        if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
+          auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
+          mlir::Type elemType = allocaOp.getElemType();
+          if (elemType && mlir::isa<mlir::LLVM::LLVMPointerType>(elemType)) {
+            // Load the pointer from alloca.
+            basePtr = builder.create<mlir::LLVM::LoadOp>(location, elemType, basePtr);
+          }
+        }
+      }
+    } else {
+      basePtr = visitExpr(fieldAccess->getBase());
+    }
+    if (!basePtr) return {};
+
+    // Look up the struct type and find the field index.
+    asc::Type *baseAstType = fieldAccess->getBase()->getType();
+    asc::Type *innerType = baseAstType;
+    if (auto *ot = dynamic_cast<OwnType *>(baseAstType)) innerType = ot->getInner();
+    if (auto *rt = dynamic_cast<RefType *>(baseAstType)) innerType = rt->getInner();
+    if (auto *rmt = dynamic_cast<RefMutType *>(baseAstType)) innerType = rmt->getInner();
+
+    auto *namedType = dynamic_cast<NamedType *>(innerType);
+    if (namedType) {
+      auto sit = sema.structDecls.find(namedType->getName());
+      if (sit != sema.structDecls.end()) {
+        StructDecl *sd = sit->second;
+        mlir::Type structMLIRType = convertStructType(sd);
+        unsigned fieldIdx = 0;
+        for (auto *field : sd->getFields()) {
+          if (field->getName() == fieldAccess->getFieldName()) break;
+          ++fieldIdx;
+        }
+        if (fieldIdx < sd->getFields().size()) {
+          auto ptrType = getPtrType();
+          auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+              location, builder.getIntegerType(32), static_cast<int64_t>(0));
+          auto fieldIdxConst = builder.create<mlir::LLVM::ConstantOp>(
+              location, builder.getIntegerType(32),
+              static_cast<int64_t>(fieldIdx));
+          auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+              location, ptrType, structMLIRType, basePtr,
+              mlir::ValueRange{i32Zero, fieldIdxConst});
+          builder.create<mlir::LLVM::StoreOp>(location, rhs, fieldPtr);
+          return {};
+        }
+      }
+    }
+  }
+
   return {};
 }
 
