@@ -478,7 +478,7 @@ mlir::Value HIRBuilder::visitStringLiteral(StringLiteral *e) {
     auto globalOp = builder.create<mlir::LLVM::GlobalOp>(
         location, mlir::LLVM::LLVMArrayType::get(builder.getIntegerType(8),
                                                    val.size()),
-        /*isConstant=*/true, mlir::LLVM::Linkage::Internal, globalName,
+        /*isConstant=*/true, mlir::LLVM::Linkage::External, globalName,
         builder.getStringAttr(val));
     (void)globalOp;
   }
