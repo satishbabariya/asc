@@ -129,17 +129,22 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
   if (auto *bt = dynamic_cast<BuiltinType *>(astType))
     return convertBuiltinType(bt->getBuiltinKind());
 
+  // Ownership wrappers: lower to concrete LLVM types.
+  // ref<T> and refmut<T> → pointer (borrows are pointers at runtime).
+  // own<T> for non-copy types → pointer (heap/stack allocated).
+  // own<T> for copy types → the inner type directly.
   if (auto *ot = dynamic_cast<OwnType *>(astType)) {
     mlir::Type inner = convertType(ot->getInner());
-    return own::OwnValType::get(&mlirCtx, inner);
+    // Copy types passed by value; non-copy by pointer.
+    if (inner.isIntOrIndexOrFloat() || inner.isInteger(1))
+      return inner;
+    return getPtrType();
   }
   if (auto *rt = dynamic_cast<RefType *>(astType)) {
-    mlir::Type inner = convertType(rt->getInner());
-    return own::BorrowType::get(&mlirCtx, inner);
+    return getPtrType(); // Shared borrow = read-only pointer.
   }
   if (auto *rmt = dynamic_cast<RefMutType *>(astType)) {
-    mlir::Type inner = convertType(rmt->getInner());
-    return own::BorrowMutType::get(&mlirCtx, inner);
+    return getPtrType(); // Mutable borrow = mutable pointer.
   }
 
   // Array type.
@@ -398,8 +403,32 @@ mlir::Value HIRBuilder::visitExportDecl(ExportDecl *d) {
 mlir::Value HIRBuilder::visitEnumDecl(EnumDecl *) { return {}; }
 mlir::Value HIRBuilder::visitTraitDecl(TraitDecl *) { return {}; }
 mlir::Value HIRBuilder::visitImplDecl(ImplDecl *d) {
-  for (auto *m : d->getMethods())
-    visitFunctionDecl(m);
+  // Get target type name for method mangling.
+  std::string typeName;
+  if (auto *nt = dynamic_cast<NamedType *>(d->getTargetType()))
+    typeName = nt->getName().str();
+
+  for (auto *m : d->getMethods()) {
+    // Emit method with mangled name: Type_method.
+    // Also register with the bare name for direct resolution.
+    if (!typeName.empty()) {
+      // Create a temporary FunctionDecl with mangled name.
+      // DECISION: We emit the method twice: once with bare name and
+      // once with mangled name, so both `method()` and `Type::method()`
+      // resolve correctly.
+      visitFunctionDecl(m);
+      // Also register with mangled name.
+      std::string mangled = typeName + "_" + m->getName().str();
+      if (auto existing = module.lookupSymbol<mlir::func::FuncOp>(m->getName())) {
+        // Clone the function with mangled name.
+        auto clone = existing.clone();
+        clone.setName(mangled);
+        module.push_back(clone);
+      }
+    } else {
+      visitFunctionDecl(m);
+    }
+  }
   return {};
 }
 mlir::Value HIRBuilder::visitTypeAliasDecl(TypeAliasDecl *) { return {}; }
@@ -785,8 +814,14 @@ mlir::Value HIRBuilder::visitIfExpr(IfExpr *e) {
       builder.create<mlir::cf::BranchOp>(location, mergeBlock);
   }
 
-  // Continue in merge block.
-  builder.setInsertionPointToStart(mergeBlock);
+  // If both branches returned, merge block has no predecessors → erase it.
+  if (mergeBlock->hasNoPredecessors()) {
+    mergeBlock->erase();
+    if (currentFunction && !currentFunction.getBody().empty())
+      builder.setInsertionPointToEnd(&currentFunction.getBody().back());
+  } else {
+    builder.setInsertionPointToStart(mergeBlock);
+  }
   return {};
 }
 
@@ -1524,14 +1559,22 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
           panicFn = builder.create<mlir::LLVM::LLVMFuncOp>(
               location, "__asc_panic", fnType);
         }
-        // Emit scf.if for the panic branch.
-        auto notCond = builder.create<mlir::arith::XOrIOp>(
-            location, cond,
-            builder.create<mlir::arith::ConstantIntOp>(location, 1,
-                                                        builder.getI1Type()));
-        auto ifOp = builder.create<mlir::scf::IfOp>(
-            location, mlir::TypeRange{}, notCond, /*hasElse=*/false);
-        builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+        // Use cf.cond_br for assert: if !cond → panic block.
+        auto *currentBlock = builder.getBlock();
+        auto *parentRegion = currentBlock->getParent();
+        auto *panicBlock = new mlir::Block();
+        auto *okBlock = new mlir::Block();
+        parentRegion->getBlocks().insertAfter(
+            mlir::Region::iterator(currentBlock), panicBlock);
+        parentRegion->getBlocks().insertAfter(
+            mlir::Region::iterator(panicBlock), okBlock);
+
+        builder.create<mlir::cf::CondBranchOp>(
+            location, cond, okBlock, mlir::ValueRange{},
+            panicBlock, mlir::ValueRange{});
+
+        // Panic block: call __asc_panic then unreachable.
+        builder.setInsertionPointToStart(panicBlock);
         auto null = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
         auto zero32 = builder.create<mlir::LLVM::ConstantOp>(
             location, i32Type, static_cast<int64_t>(0));
@@ -1539,8 +1582,9 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
             location, panicFn,
             mlir::ValueRange{null, zero32, null, zero32, zero32, zero32});
         builder.create<mlir::LLVM::UnreachableOp>(location);
-        builder.create<mlir::scf::YieldOp>(location);
-        builder.setInsertionPointAfter(ifOp);
+
+        // Continue in ok block.
+        builder.setInsertionPointToStart(okBlock);
       }
     }
     return {};

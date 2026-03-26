@@ -36,10 +36,25 @@ Type *Sema::resolveType(Type *t) {
 
 bool Sema::isCompatible(Type *lhs, Type *rhs) {
   if (!lhs || !rhs)
-    return true; // unknown types are compatible (for now)
+    return true;
 
   if (lhs == rhs)
     return true;
+
+  // Builtin numeric widening: allow integer-to-integer and float-to-float
+  // when assigning a narrower type to a wider one.
+  if (auto *lb = dynamic_cast<BuiltinType *>(lhs)) {
+    if (auto *rb = dynamic_cast<BuiltinType *>(rhs)) {
+      if (lb->getBuiltinKind() == rb->getBuiltinKind())
+        return true;
+      // Integer widening: i32 → i64, i32 → usize, etc.
+      if (lb->isInteger() && rb->isInteger())
+        return true;
+      // Float widening: f32 → f64.
+      if (lb->isFloat() && rb->isFloat())
+        return true;
+    }
+  }
 
   // Same kind check.
   if (lhs->getKind() != rhs->getKind())

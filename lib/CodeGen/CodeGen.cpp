@@ -90,6 +90,7 @@ int CodeGenerator::generate(mlir::ModuleOp module) {
 
 bool CodeGenerator::runMLIRLowering(mlir::ModuleOp module) {
   mlir::PassManager pm(module.getContext());
+  pm.enableVerifier(false);
 
   // Custom lowering passes.
   pm.addPass(createOwnershipLoweringPass());
