@@ -372,7 +372,9 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
   if (init && !d->getName().empty()) {
     // Mutable variables (let): allocate on stack so loop bodies can
     // store updated values. LLVM mem2reg will promote to SSA later.
-    if (!d->isConst() && init.getType().isIntOrIndexOrFloat()) {
+    // Also alloca for pointer types (enums, structs) so loop mutations work.
+    if (!d->isConst() && (init.getType().isIntOrIndexOrFloat() ||
+        mlir::isa<mlir::LLVM::LLVMPointerType>(init.getType()))) {
       auto ptrType = getPtrType();
       auto i64One = builder.create<mlir::LLVM::ConstantOp>(
           location, builder.getIntegerType(64), static_cast<int64_t>(1));
@@ -585,7 +587,8 @@ mlir::Value HIRBuilder::visitDeclRefExpr(DeclRefExpr *e) {
     if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
       auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
       mlir::Type elemType = allocaOp.getElemType();
-      if (elemType && elemType.isIntOrIndexOrFloat()) {
+      if (elemType && (elemType.isIntOrIndexOrFloat() ||
+          mlir::isa<mlir::LLVM::LLVMPointerType>(elemType))) {
         return builder.create<mlir::LLVM::LoadOp>(
             builder.getUnknownLoc(), elemType, val);
       }
@@ -728,7 +731,6 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
     auto ownerInfo = sema.getExprOwnership(e->getArgs()[i]);
     switch (ownerInfo.kind) {
     case OwnershipKind::Moved:
-      // Transfer ownership: emit own.move.
       if (mlir::isa<own::OwnValType>(v.getType()))
         v = emitMove(v, location);
       break;
@@ -746,6 +748,80 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
       break;
     }
     args.push_back(v);
+  }
+
+  // Check if this is an enum variant constructor (e.g., Maybe::Some(42)).
+  // Detect by checking if calleeName matches "EnumName_VariantName" pattern.
+  if (auto *path = dynamic_cast<PathExpr *>(e->getCallee())) {
+    const auto &segs = path->getSegments();
+    if (segs.size() >= 2) {
+      auto eit = sema.enumDecls.find(segs[0]);
+      if (eit != sema.enumDecls.end()) {
+        EnumDecl *ed = eit->second;
+        int32_t variantIdx = -1;
+        EnumVariantDecl *variant = nullptr;
+        for (unsigned vi = 0; vi < ed->getVariants().size(); ++vi) {
+          if (ed->getVariants()[vi]->getName() == segs.back()) {
+            variantIdx = static_cast<int32_t>(vi);
+            variant = ed->getVariants()[vi];
+            break;
+          }
+        }
+        if (variantIdx >= 0 && variant) {
+          // Construct enum tagged union with payload.
+          auto *namedType = astCtx.create<NamedType>(
+              segs[0], std::vector<asc::Type *>{}, SourceLocation());
+          mlir::Type enumType = convertType(namedType);
+          auto ptrType = getPtrType();
+          auto i32Ty = builder.getIntegerType(32);
+          auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+              location, builder.getIntegerType(64), static_cast<int64_t>(1));
+
+          // Allocate enum on stack.
+          auto alloca = builder.create<mlir::LLVM::AllocaOp>(
+              location, ptrType, enumType, i64One);
+
+          // Store discriminant.
+          auto discVal = builder.create<mlir::arith::ConstantIntOp>(
+              location, variantIdx, i32Ty);
+          auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+              location, i32Ty, static_cast<int64_t>(0));
+          auto tagPtr = builder.create<mlir::LLVM::GEPOp>(
+              location, ptrType, enumType, alloca,
+              mlir::ValueRange{i32Zero, i32Zero});
+          builder.create<mlir::LLVM::StoreOp>(location, discVal, tagPtr);
+
+          // Store payload values at offset after tag (field index 1).
+          if (!args.empty()) {
+            auto i32One = builder.create<mlir::LLVM::ConstantOp>(
+                location, i32Ty, static_cast<int64_t>(1));
+            auto payloadPtr = builder.create<mlir::LLVM::GEPOp>(
+                location, ptrType, enumType, alloca,
+                mlir::ValueRange{i32Zero, i32One});
+            // For single payload: store directly.
+            if (args.size() == 1) {
+              builder.create<mlir::LLVM::StoreOp>(
+                  location, args[0], payloadPtr);
+            } else {
+              // Multi-field payload: store each at byte offset.
+              uint64_t offset = 0;
+              auto i8Ty = builder.getIntegerType(8);
+              for (unsigned ai = 0; ai < args.size(); ++ai) {
+                auto offConst = builder.create<mlir::LLVM::ConstantOp>(
+                    location, i32Ty, static_cast<int64_t>(offset));
+                auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+                    location, ptrType, i8Ty, payloadPtr,
+                    mlir::ValueRange{offConst});
+                builder.create<mlir::LLVM::StoreOp>(
+                    location, args[ai], fieldPtr);
+                offset += getTypeSize(args[ai].getType());
+              }
+            }
+          }
+          return alloca;
+        }
+      }
+    }
   }
 
   // Look up function in module.
@@ -1349,16 +1425,48 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
     return {};
 
   // Determine if scrutinee is an enum (pointer to tagged union).
+  // Determine if scrutinee is an enum (pointer to tagged union).
   bool isEnumScrutinee = mlir::isa<mlir::LLVM::LLVMPointerType>(
       scrutinee.getType());
+
+  // Look up the enum MLIR type for correct GEP indexing.
+  // Try to get it from the scrutinee's defining alloca op.
+  mlir::Type enumMLIRTypeForGEP;
+  if (auto *defOp = scrutinee.getDefiningOp()) {
+    if (auto allocaOp = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp))
+      enumMLIRTypeForGEP = allocaOp.getElemType();
+  }
+  // Fallback: try AST type.
+  if (!enumMLIRTypeForGEP) {
+    asc::Type *scrutAstType = e->getScrutinee()->getType();
+    if (scrutAstType) {
+      asc::Type *inner = scrutAstType;
+      if (auto *ot = dynamic_cast<OwnType *>(scrutAstType)) inner = ot->getInner();
+      if (auto *rt = dynamic_cast<RefType *>(scrutAstType)) inner = rt->getInner();
+      enumMLIRTypeForGEP = convertType(inner);
+    }
+  }
+
   mlir::Value discriminant;
   if (isEnumScrutinee) {
-    // Load discriminant from offset 0 (i32 tag).
     auto i32Ty = builder.getIntegerType(32);
-    discriminant = builder.create<mlir::LLVM::LoadOp>(location, i32Ty,
-                                                       scrutinee);
+    if (enumMLIRTypeForGEP &&
+        mlir::isa<mlir::LLVM::LLVMStructType>(enumMLIRTypeForGEP)) {
+      // GEP to field 0 (tag), then load.
+      auto ptrType = getPtrType();
+      auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+          location, i32Ty, static_cast<int64_t>(0));
+      auto tagPtr = builder.create<mlir::LLVM::GEPOp>(
+          location, ptrType, enumMLIRTypeForGEP, scrutinee,
+          mlir::ValueRange{i32Zero, i32Zero});
+      discriminant = builder.create<mlir::LLVM::LoadOp>(location, i32Ty,
+                                                         tagPtr);
+    } else {
+      // Fallback: direct load as i32.
+      discriminant = builder.create<mlir::LLVM::LoadOp>(location, i32Ty,
+                                                         scrutinee);
+    }
   } else {
-    // Scrutinee is a scalar — use directly for comparison.
     discriminant = scrutinee;
   }
 
@@ -1438,22 +1546,60 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
       // Bind payload arguments if present.
       if (isEnumScrutinee && !enumPat->getArgs().empty()) {
         auto ptrType = getPtrType();
+        auto i32Ty = builder.getIntegerType(32);
+        auto i8Ty = builder.getIntegerType(8);
         auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
-            location, builder.getIntegerType(32), static_cast<int64_t>(0));
+            location, i32Ty, static_cast<int64_t>(0));
         auto i32One = builder.create<mlir::LLVM::ConstantOp>(
-            location, builder.getIntegerType(32), static_cast<int64_t>(1));
-        // GEP to payload (field 1 of the tagged union).
+            location, i32Ty, static_cast<int64_t>(1));
+
+        // Use the enum struct type computed at the top.
+        mlir::Type enumMLIRType = enumMLIRTypeForGEP;
+        if (!enumMLIRType ||
+            !mlir::isa<mlir::LLVM::LLVMStructType>(enumMLIRType))
+          enumMLIRType = scrutinee.getType();
+
+        // GEP to payload area (field 1 of tagged union struct).
         auto payloadPtr = builder.create<mlir::LLVM::GEPOp>(
-            location, ptrType, scrutinee.getType(), scrutinee,
+            location, ptrType, enumMLIRType, scrutinee,
             mlir::ValueRange{i32Zero, i32One});
-        // Bind each payload arg as pattern variable.
-        for (auto *argPat : enumPat->getArgs()) {
+
+        // Look up variant's actual tuple types.
+        std::vector<mlir::Type> fieldTypes;
+        if (variantIdx >= 0 && path.size() >= 2) {
+          auto eit2 = sema.enumDecls.find(path[0]);
+          if (eit2 != sema.enumDecls.end()) {
+            auto *v = eit2->second->getVariants()[variantIdx];
+            for (auto *tt : v->getTupleTypes())
+              fieldTypes.push_back(convertType(tt));
+          }
+        }
+
+        // Bind each payload field at correct offset.
+        uint64_t byteOffset = 0;
+        for (unsigned ai = 0; ai < enumPat->getArgs().size(); ++ai) {
+          auto *argPat = enumPat->getArgs()[ai];
           if (auto *ip = dynamic_cast<IdentPattern *>(argPat)) {
-            // Load the payload value.
-            // DECISION: Assume single-field payload for now.
-            auto payloadVal = builder.create<mlir::LLVM::LoadOp>(
-                location, builder.getIntegerType(32), payloadPtr);
-            declare(ip->getName(), payloadVal);
+            mlir::Type loadType = (ai < fieldTypes.size())
+                ? fieldTypes[ai] : i32Ty;
+
+            if (ai == 0 && enumPat->getArgs().size() == 1) {
+              // Single field: load directly from payload ptr.
+              auto payloadVal = builder.create<mlir::LLVM::LoadOp>(
+                  location, loadType, payloadPtr);
+              declare(ip->getName(), payloadVal);
+            } else {
+              // Multi-field: GEP to byte offset within payload.
+              auto offConst = builder.create<mlir::LLVM::ConstantOp>(
+                  location, i32Ty, static_cast<int64_t>(byteOffset));
+              auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+                  location, ptrType, i8Ty, payloadPtr,
+                  mlir::ValueRange{offConst});
+              auto payloadVal = builder.create<mlir::LLVM::LoadOp>(
+                  location, loadType, fieldPtr);
+              declare(ip->getName(), payloadVal);
+            }
+            byteOffset += getTypeSize(loadType);
           }
         }
       }

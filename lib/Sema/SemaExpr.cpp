@@ -414,6 +414,33 @@ Type *Sema::checkMatchExpr(MatchExpr *e) {
         sym.type = scrutType;
         currentScope->declare(ip->getName(), std::move(sym));
       }
+      // Enum pattern: bind inner pattern variables.
+      if (auto *ep = dynamic_cast<EnumPattern *>(arm.pattern)) {
+        // Look up the enum variant to get payload types.
+        const auto &path = ep->getPath();
+        std::vector<Type *> payloadTypes;
+        if (path.size() >= 2) {
+          auto eit = enumDecls.find(path[0]);
+          if (eit != enumDecls.end()) {
+            for (auto *v : eit->second->getVariants()) {
+              if (v->getName() == path.back()) {
+                payloadTypes = std::vector<Type *>(
+                    v->getTupleTypes().begin(), v->getTupleTypes().end());
+                break;
+              }
+            }
+          }
+        }
+        for (unsigned ai = 0; ai < ep->getArgs().size(); ++ai) {
+          if (auto *innerIp = dynamic_cast<IdentPattern *>(ep->getArgs()[ai])) {
+            Symbol sym;
+            sym.name = innerIp->getName().str();
+            // Use the actual payload type if known, else fall back to scrutinee type.
+            sym.type = (ai < payloadTypes.size()) ? payloadTypes[ai] : scrutType;
+            currentScope->declare(innerIp->getName(), std::move(sym));
+          }
+        }
+      }
     }
     if (arm.guard)
       checkExpr(arm.guard);
