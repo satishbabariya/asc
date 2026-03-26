@@ -475,9 +475,11 @@ Expr *Parser::parsePrimaryExpr() {
       if (firstInBrace.is(tok::r_brace) || firstInBrace.is(tok::dotdot)) {
         isStructLit = true;
       } else if (firstInBrace.is(tok::identifier)) {
-        // DECISION: If first token inside { is an identifier, treat as
-        // struct literal. This is correct for `Point { x: 1, y: 2 }`.
-        isStructLit = true;
+        // DECISION: Only treat as struct literal if the outer name starts
+        // with uppercase (type name convention). This avoids misinterpreting
+        // `while n { result = ... }` as a struct literal `n { result: ...}`.
+        if (!name.empty() && name[0] >= 'A' && name[0] <= 'Z')
+          isStructLit = true;
       }
 
       if (isStructLit) {

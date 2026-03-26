@@ -370,13 +370,24 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
     init = visitExpr(d->getInit());
 
   if (init && !d->getName().empty()) {
-    // Only wrap in own.alloc for non-copy owned types (e.g., structs, Box).
-    // Copy types (i32, f64, bool, @copy structs) are passed by value directly.
+    // Mutable variables (let): allocate on stack so loop bodies can
+    // store updated values. LLVM mem2reg will promote to SSA later.
+    if (!d->isConst() && init.getType().isIntOrIndexOrFloat()) {
+      auto ptrType = getPtrType();
+      auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(64), static_cast<int64_t>(1));
+      auto alloca = builder.create<mlir::LLVM::AllocaOp>(
+          location, ptrType, init.getType(), i64One);
+      builder.create<mlir::LLVM::StoreOp>(location, init, alloca);
+      declare(d->getName(), alloca);
+      return alloca;
+    }
+
+    // Non-copy owned types: wrap in own.alloc.
     auto ownerInfo = sema.getVarOwnership(d);
     if (ownerInfo.kind == OwnershipKind::Owned && !ownerInfo.isCopy &&
         !mlir::isa_and_nonnull<own::OwnValType>(init.getType()) &&
         !mlir::isa<mlir::LLVM::LLVMPointerType>(init.getType())) {
-      // Wrap in own.alloc for heap-owned non-copy values.
       auto ownType = own::OwnValType::get(&mlirCtx, init.getType(),
                                            ownerInfo.isSend, ownerInfo.isSync);
       init = builder.create<own::OwnAllocOp>(location, ownType, init).getResult();
@@ -562,7 +573,25 @@ mlir::Value HIRBuilder::visitBoolLiteral(BoolLiteral *e) {
 mlir::Value HIRBuilder::visitNullLiteral(NullLiteral *) { return {}; }
 
 mlir::Value HIRBuilder::visitDeclRefExpr(DeclRefExpr *e) {
-  return lookup(e->getName());
+  mlir::Value val = lookup(e->getName());
+  if (!val) return {};
+
+  // If this is a mutable variable stored in alloca (pointer to scalar),
+  // load the current value. We detect alloca-backed vars by checking if
+  // the value is a pointer AND the AST type is a scalar.
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(val.getType())) {
+    // Check if this is a mutable scalar var (not a struct pointer).
+    auto *defOp = val.getDefiningOp();
+    if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
+      auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
+      mlir::Type elemType = allocaOp.getElemType();
+      if (elemType && elemType.isIntOrIndexOrFloat()) {
+        return builder.create<mlir::LLVM::LoadOp>(
+            builder.getUnknownLoc(), elemType, val);
+      }
+    }
+  }
+  return val;
 }
 
 mlir::Value HIRBuilder::visitBinaryExpr(BinaryExpr *e) {
@@ -832,7 +861,38 @@ mlir::Value HIRBuilder::visitBlockExpr(BlockExpr *e) {
 }
 
 mlir::Value HIRBuilder::visitAssignExpr(AssignExpr *e) {
-  visitExpr(e->getValue());
+  auto location = loc(e->getLocation());
+  mlir::Value rhs = visitExpr(e->getValue());
+  if (!rhs) return {};
+
+  // For simple variable assignment: store to the alloca.
+  if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getTarget())) {
+    mlir::Value target = lookup(ref->getName());
+    if (target && mlir::isa<mlir::LLVM::LLVMPointerType>(target.getType())) {
+      // Compound assignment: +=, -=, *=, etc.
+      if (e->getOp() != AssignOp::Assign) {
+        auto *defOp = target.getDefiningOp();
+        if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
+          auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
+          mlir::Type elemType = allocaOp.getElemType();
+          if (elemType && elemType.isIntOrIndexOrFloat()) {
+            auto current = builder.create<mlir::LLVM::LoadOp>(location, elemType, target);
+            switch (e->getOp()) {
+            case AssignOp::AddAssign:
+              rhs = builder.create<mlir::arith::AddIOp>(location, current, rhs); break;
+            case AssignOp::SubAssign:
+              rhs = builder.create<mlir::arith::SubIOp>(location, current, rhs); break;
+            case AssignOp::MulAssign:
+              rhs = builder.create<mlir::arith::MulIOp>(location, current, rhs); break;
+            default: break;
+            }
+          }
+        }
+      }
+      builder.create<mlir::LLVM::StoreOp>(location, rhs, target);
+      return {};
+    }
+  }
   return {};
 }
 
@@ -1428,14 +1488,57 @@ mlir::Value HIRBuilder::visitLoopExpr(LoopExpr *e) {
 
 mlir::Value HIRBuilder::visitWhileExpr(WhileExpr *e) {
   auto location = loc(e->getLocation());
-  // Emit condition and body.
-  pushScope();
+
+  // Create loop blocks: condBlock → bodyBlock → exitBlock
+  auto *currentBlock = builder.getBlock();
+  auto *parentRegion = currentBlock->getParent();
+
+  auto *condBlock = new mlir::Block();
+  auto *bodyBlock = new mlir::Block();
+  auto *exitBlock = new mlir::Block();
+
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(currentBlock), condBlock);
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(condBlock), bodyBlock);
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(bodyBlock), exitBlock);
+
+  // Branch to condition block.
+  builder.create<mlir::cf::BranchOp>(location, condBlock);
+
+  // Condition block: evaluate condition, branch to body or exit.
+  builder.setInsertionPointToStart(condBlock);
   mlir::Value cond = visitExpr(e->getCondition());
+  if (cond && !cond.getType().isInteger(1)) {
+    auto zero = builder.create<mlir::arith::ConstantIntOp>(location, 0,
+                                                            cond.getType());
+    cond = builder.create<mlir::arith::CmpIOp>(
+        location, mlir::arith::CmpIPredicate::ne, cond, zero);
+  }
+  if (cond)
+    builder.create<mlir::cf::CondBranchOp>(location, cond, bodyBlock,
+                                            mlir::ValueRange{}, exitBlock,
+                                            mlir::ValueRange{});
+  else
+    builder.create<mlir::cf::BranchOp>(location, exitBlock);
+
+  // Body block: execute body, branch back to condition.
+  builder.setInsertionPointToStart(bodyBlock);
+  pushScope();
   if (e->getBody())
     visitCompoundStmt(e->getBody());
   popScope();
-  (void)location;
-  (void)cond;
+  // After body statements, the insertion point may be in a different block
+  // (e.g., if the body contains if/else which created merge blocks).
+  // Add back-edge from whatever block we're in now.
+  auto *currentBodyEnd = builder.getBlock();
+  if (currentBodyEnd->empty() ||
+      !currentBodyEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
+    builder.create<mlir::cf::BranchOp>(location, condBlock);
+
+  // Continue in exit block.
+  builder.setInsertionPointToStart(exitBlock);
   return {};
 }
 
