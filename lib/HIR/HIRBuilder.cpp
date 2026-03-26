@@ -1470,60 +1470,62 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
     discriminant = scrutinee;
   }
 
-  // Build a chain of if-else for each arm.
-  // Last arm result becomes the match result.
-  mlir::Value result;
-  mlir::Value lastCond;
+  // Build match as a chain of cf.cond_br arms.
+  auto *currentBlock = builder.getBlock();
+  auto *parentRegion = currentBlock->getParent();
+  auto *mergeBlock = new mlir::Block();
+  auto i32Ty = builder.getIntegerType(32);
 
+  // Create blocks: one per arm + merge.
+  llvm::SmallVector<mlir::Block *, 8> armBlocks;
+  llvm::SmallVector<mlir::Block *, 8> checkBlocks;
+  for (unsigned i = 0; i < e->getArms().size(); ++i) {
+    armBlocks.push_back(new mlir::Block());
+    if (i + 1 < e->getArms().size())
+      checkBlocks.push_back(new mlir::Block());
+  }
+
+  // Insert all blocks into parent region.
+  auto insertAfter = mlir::Region::iterator(currentBlock);
+  for (unsigned i = 0; i < e->getArms().size(); ++i) {
+    if (i < checkBlocks.size()) {
+      parentRegion->getBlocks().insertAfter(insertAfter, checkBlocks[i]);
+      insertAfter = mlir::Region::iterator(checkBlocks[i]);
+    }
+    parentRegion->getBlocks().insertAfter(insertAfter, armBlocks[i]);
+    insertAfter = mlir::Region::iterator(armBlocks[i]);
+  }
+  parentRegion->getBlocks().insertAfter(insertAfter, mergeBlock);
+
+  // Emit arm chain: check → arm → merge.
   for (unsigned i = 0; i < e->getArms().size(); ++i) {
     const auto &arm = e->getArms()[i];
-    pushScope();
-
+    bool isLast = (i + 1 == e->getArms().size());
     bool isWildcard = dynamic_cast<WildcardPattern *>(arm.pattern) != nullptr;
     bool isIdent = dynamic_cast<IdentPattern *>(arm.pattern) != nullptr;
+    mlir::Block *nextCheck = isLast ? mergeBlock
+        : (i < checkBlocks.size() ? checkBlocks[i] : mergeBlock);
 
+    // --- Emit condition check in current block ---
     if (isWildcard || isIdent) {
-      // Default arm — bind scrutinee and emit body.
-      if (isIdent) {
-        auto *ip = static_cast<IdentPattern *>(arm.pattern);
-        declare(ip->getName(), scrutinee);
-      }
-      if (arm.guard) {
-        visitExpr(arm.guard);
-      }
-      result = visitExpr(arm.body);
+      // Default/wildcard: unconditional branch to arm block.
+      builder.create<mlir::cf::BranchOp>(location, armBlocks[i]);
     } else if (auto *litPat = dynamic_cast<LiteralPattern *>(arm.pattern)) {
-      // Literal pattern — compare discriminant/scrutinee to literal.
       mlir::Value patVal = visitExpr(litPat->getLiteral());
-      if (patVal && discriminant) {
-        // Ensure types match.
-        if (patVal.getType() != discriminant.getType() &&
-            discriminant.getType().isIntOrIndex() &&
-            patVal.getType().isIntOrIndex()) {
-          unsigned dstW = discriminant.getType().getIntOrFloatBitWidth();
-          unsigned srcW = patVal.getType().getIntOrFloatBitWidth();
-          if (srcW < dstW)
-            patVal = builder.create<mlir::arith::ExtSIOp>(location,
-                discriminant.getType(), patVal);
-          else if (srcW > dstW)
-            patVal = builder.create<mlir::arith::TruncIOp>(location,
-                discriminant.getType(), patVal);
-        }
-        lastCond = builder.create<mlir::arith::CmpIOp>(
-            location, mlir::arith::CmpIPredicate::eq, discriminant, patVal);
+      if (patVal && patVal.getType() != discriminant.getType() &&
+          discriminant.getType().isIntOrIndex() && patVal.getType().isIntOrIndex()) {
+        if (patVal.getType().getIntOrFloatBitWidth() < discriminant.getType().getIntOrFloatBitWidth())
+          patVal = builder.create<mlir::arith::ExtSIOp>(location, discriminant.getType(), patVal);
+        else if (patVal.getType().getIntOrFloatBitWidth() > discriminant.getType().getIntOrFloatBitWidth())
+          patVal = builder.create<mlir::arith::TruncIOp>(location, discriminant.getType(), patVal);
       }
-      if (arm.guard) {
-        mlir::Value guardVal = visitExpr(arm.guard);
-        if (lastCond && guardVal)
-          lastCond = builder.create<mlir::arith::AndIOp>(location, lastCond,
-                                                          guardVal);
-      }
-      result = visitExpr(arm.body);
+      auto cond = builder.create<mlir::arith::CmpIOp>(
+          location, mlir::arith::CmpIPredicate::eq, discriminant, patVal);
+      builder.create<mlir::cf::CondBranchOp>(location, cond, armBlocks[i],
+          mlir::ValueRange{}, nextCheck, mlir::ValueRange{});
     } else if (auto *enumPat = dynamic_cast<EnumPattern *>(arm.pattern)) {
-      // Enum pattern — compare discriminant to variant index.
+      // Enum pattern: compare discriminant to variant index, branch to arm.
       const auto &path = enumPat->getPath();
-      // DECISION: Variant index is determined by order in enum declaration.
-      // Look up the enum and find the variant index.
       int32_t variantIdx = -1;
       if (path.size() >= 2) {
         auto eit = sema.enumDecls.find(path[0]);
@@ -1539,32 +1541,36 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
       if (variantIdx >= 0 && discriminant) {
         auto idxConst = builder.create<mlir::arith::ConstantIntOp>(
             location, variantIdx, discriminant.getType());
-        lastCond = builder.create<mlir::arith::CmpIOp>(
+        auto cond = builder.create<mlir::arith::CmpIOp>(
             location, mlir::arith::CmpIPredicate::eq, discriminant, idxConst);
+        builder.create<mlir::cf::CondBranchOp>(location, cond, armBlocks[i],
+            mlir::ValueRange{}, nextCheck, mlir::ValueRange{});
+      } else {
+        builder.create<mlir::cf::BranchOp>(location, nextCheck);
       }
 
-      // Bind payload arguments if present.
+      // --- Emit arm body in arm block ---
+      builder.setInsertionPointToStart(armBlocks[i]);
+      pushScope();
+
+      // Bind payload arguments.
       if (isEnumScrutinee && !enumPat->getArgs().empty()) {
         auto ptrType = getPtrType();
-        auto i32Ty = builder.getIntegerType(32);
         auto i8Ty = builder.getIntegerType(8);
-        auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+        auto i32Zero2 = builder.create<mlir::LLVM::ConstantOp>(
             location, i32Ty, static_cast<int64_t>(0));
-        auto i32One = builder.create<mlir::LLVM::ConstantOp>(
+        auto i32One2 = builder.create<mlir::LLVM::ConstantOp>(
             location, i32Ty, static_cast<int64_t>(1));
 
-        // Use the enum struct type computed at the top.
-        mlir::Type enumMLIRType = enumMLIRTypeForGEP;
-        if (!enumMLIRType ||
-            !mlir::isa<mlir::LLVM::LLVMStructType>(enumMLIRType))
-          enumMLIRType = scrutinee.getType();
+        mlir::Type enumT = enumMLIRTypeForGEP;
+        if (!enumT || !mlir::isa<mlir::LLVM::LLVMStructType>(enumT))
+          enumT = scrutinee.getType();
 
-        // GEP to payload area (field 1 of tagged union struct).
         auto payloadPtr = builder.create<mlir::LLVM::GEPOp>(
-            location, ptrType, enumMLIRType, scrutinee,
-            mlir::ValueRange{i32Zero, i32One});
+            location, ptrType, enumT, scrutinee,
+            mlir::ValueRange{i32Zero2, i32One2});
 
-        // Look up variant's actual tuple types.
+        // Look up variant's payload types.
         std::vector<mlir::Type> fieldTypes;
         if (variantIdx >= 0 && path.size() >= 2) {
           auto eit2 = sema.enumDecls.find(path[0]);
@@ -1575,50 +1581,92 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
           }
         }
 
-        // Bind each payload field at correct offset.
         uint64_t byteOffset = 0;
         for (unsigned ai = 0; ai < enumPat->getArgs().size(); ++ai) {
-          auto *argPat = enumPat->getArgs()[ai];
-          if (auto *ip = dynamic_cast<IdentPattern *>(argPat)) {
+          if (auto *ip = dynamic_cast<IdentPattern *>(enumPat->getArgs()[ai])) {
             mlir::Type loadType = (ai < fieldTypes.size())
                 ? fieldTypes[ai] : i32Ty;
-
             if (ai == 0 && enumPat->getArgs().size() == 1) {
-              // Single field: load directly from payload ptr.
-              auto payloadVal = builder.create<mlir::LLVM::LoadOp>(
+              auto val = builder.create<mlir::LLVM::LoadOp>(
                   location, loadType, payloadPtr);
-              declare(ip->getName(), payloadVal);
+              declare(ip->getName(), val);
             } else {
-              // Multi-field: GEP to byte offset within payload.
-              auto offConst = builder.create<mlir::LLVM::ConstantOp>(
+              auto off = builder.create<mlir::LLVM::ConstantOp>(
                   location, i32Ty, static_cast<int64_t>(byteOffset));
-              auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+              auto fPtr = builder.create<mlir::LLVM::GEPOp>(
                   location, ptrType, i8Ty, payloadPtr,
-                  mlir::ValueRange{offConst});
-              auto payloadVal = builder.create<mlir::LLVM::LoadOp>(
-                  location, loadType, fieldPtr);
-              declare(ip->getName(), payloadVal);
+                  mlir::ValueRange{off});
+              auto val = builder.create<mlir::LLVM::LoadOp>(
+                  location, loadType, fPtr);
+              declare(ip->getName(), val);
             }
             byteOffset += getTypeSize(loadType);
           }
         }
       }
 
-      if (arm.guard) {
-        mlir::Value guardVal = visitExpr(arm.guard);
-        if (lastCond && guardVal)
-          lastCond = builder.create<mlir::arith::AndIOp>(location, lastCond,
-                                                          guardVal);
-      }
-      result = visitExpr(arm.body);
+      visitExpr(arm.body);
+      popScope();
+      auto *curBlock = builder.getBlock();
+      if (curBlock->empty() ||
+          !curBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+        builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+
+      // Set insertion point for next check block.
+      if (!isLast && i < checkBlocks.size())
+        builder.setInsertionPointToStart(checkBlocks[i]);
+      continue;
     } else {
-      // Fallback: just emit the body.
-      result = visitExpr(arm.body);
+      // Unknown pattern: branch to arm unconditionally.
+      builder.create<mlir::cf::BranchOp>(location, armBlocks[i]);
     }
 
+    // --- Emit arm body in arm block ---
+    builder.setInsertionPointToStart(armBlocks[i]);
+    pushScope();
+    if (isIdent) {
+      auto *ip = static_cast<IdentPattern *>(arm.pattern);
+      declare(ip->getName(), scrutinee);
+    }
+    visitExpr(arm.body);
     popScope();
+    auto *curBlock2 = builder.getBlock();
+    if (curBlock2->empty() ||
+        !curBlock2->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+
+    // Set insertion point for next check block.
+    if (!isLast && i < checkBlocks.size())
+      builder.setInsertionPointToStart(checkBlocks[i]);
   }
-  return result;
+
+  // Merge block: handle based on predecessors.
+  if (mergeBlock->hasNoPredecessors()) {
+    mergeBlock->erase();
+    if (currentFunction && !currentFunction.getBody().empty())
+      builder.setInsertionPointToEnd(&currentFunction.getBody().back());
+  } else {
+    builder.setInsertionPointToStart(mergeBlock);
+    // If all arms have terminators (returns), the merge block is unreachable
+    // from arm bodies but may be reached from the last check's "else" branch.
+    // Add unreachable to handle this exhaustive-match fallthrough.
+    if (currentFunction &&
+        currentFunction.getFunctionType().getNumResults() > 0) {
+      // Emit a dummy 0 return for the unreachable merge path.
+      mlir::Type retType = currentFunction.getFunctionType().getResult(0);
+      if (retType.isIntOrIndexOrFloat()) {
+        auto zero = builder.create<mlir::arith::ConstantIntOp>(
+            location, 0, retType);
+        builder.create<mlir::func::ReturnOp>(location,
+                                              mlir::ValueRange{zero});
+      } else {
+        builder.create<mlir::func::ReturnOp>(location);
+      }
+    } else {
+      builder.create<mlir::func::ReturnOp>(location);
+    }
+  }
+  return {};
 }
 
 mlir::Value HIRBuilder::visitLoopExpr(LoopExpr *e) {
