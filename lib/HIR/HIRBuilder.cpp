@@ -855,6 +855,38 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
     }
   }
 
+  // Built-in type constructors: String::new(), Vec::new().
+  if (calleeName == "String_new" || calleeName == "String::new") {
+    auto ptrType = getPtrType();
+    auto stringNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_new");
+    if (!stringNewFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {});
+      stringNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_string_new", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(location, stringNewFn,
+                                               mlir::ValueRange{}).getResult();
+  }
+
+  if (calleeName == "Vec_new" || calleeName == "Vec::new") {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto vecNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_new");
+    if (!vecNewFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i32Ty});
+      vecNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_new", fnType);
+    }
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4)); // DECISION: default 4 bytes
+    return builder.create<mlir::LLVM::CallOp>(location, vecNewFn,
+                                               mlir::ValueRange{elemSize}).getResult();
+  }
+
   // Look up function in module.
   auto callee = module.lookupSymbol<mlir::func::FuncOp>(calleeName);
   if (callee) {
@@ -1280,23 +1312,153 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     }
   }
 
-  // Vec::len() → load len field.
-  if ((receiverTypeName == "Vec" || receiverTypeName.starts_with("Vec_") ||
-       receiverTypeName == "String")
-      && methodName == "len") {
-    if (receiver && mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+  // len() on any pointer type → call runtime __asc_vec_len or __asc_string_len.
+  // DECISION: Both String and Vec have {ptr, len, cap} layout, so same function.
+  if (methodName == "len" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i64Ty = builder.getIntegerType(64);
+    auto lenFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_len");
+    if (!lenFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i64Ty, {ptrType});
+      lenFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_len", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, lenFn, mlir::ValueRange{receiver}).getResult();
+  }
+
+  // --- String runtime intrinsics ---
+
+  // push_str(s) → call __asc_string_push_str(self, data, len)
+  // DECISION: Detect by method name since receiver type may not be resolved.
+  if (methodName == "push_str" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    if (receiver && !args.empty()) {
       auto ptrType = getPtrType();
       auto i64Ty = builder.getIntegerType(64);
-      auto vecStructType = mlir::LLVM::LLVMStructType::getLiteral(
-          &mlirCtx, {ptrType, i64Ty, i64Ty});
-      auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
-          location, builder.getIntegerType(32), static_cast<int64_t>(0));
-      auto i32One = builder.create<mlir::LLVM::ConstantOp>(
-          location, builder.getIntegerType(32), static_cast<int64_t>(1));
-      auto lenPtr = builder.create<mlir::LLVM::GEPOp>(
-          location, ptrType, vecStructType, receiver,
-          mlir::ValueRange{i32Zero, i32One});
-      return builder.create<mlir::LLVM::LoadOp>(location, i64Ty, lenPtr);
+      auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+      // Declare __asc_string_push_str if not present.
+      auto pushFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_push_str");
+      if (!pushFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(
+            voidTy, {ptrType, ptrType, i64Ty});
+        pushFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+            location, "__asc_string_push_str", fnType);
+      }
+
+      // Args: receiver (String*), data_ptr (from string literal), len.
+      // For string literal args, the arg is a pointer from llvm.addressof.
+      // We need to compute the length. For now use a constant based on the
+      // AST string literal length.
+      mlir::Value dataPtr = args[1]; // second arg (first is receiver)
+      mlir::Value dataLen;
+
+      // DECISION: String literal length tracked via global array size.
+      // For simplicity, use strlen-like approach: pass 0 as len placeholder,
+      // and the C runtime will handle it. Actually, let's pass the actual len.
+      if (e->getArgs().size() > 0) {
+        if (auto *strLit = dynamic_cast<StringLiteral *>(e->getArgs()[0])) {
+          std::string val = strLit->getValue().str();
+          if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+            val = val.substr(1, val.size() - 2);
+          dataLen = builder.create<mlir::LLVM::ConstantOp>(
+              location, i64Ty, static_cast<int64_t>(val.size()));
+        }
+      }
+      if (!dataLen)
+        dataLen = builder.create<mlir::LLVM::ConstantOp>(
+            location, i64Ty, static_cast<int64_t>(0));
+
+      builder.create<mlir::LLVM::CallOp>(
+          location, pushFn,
+          mlir::ValueRange{receiver, dataPtr, dataLen});
+      return {};
+    }
+  }
+
+  // --- Vec runtime intrinsics ---
+
+  // Vec::push(item) → call __asc_vec_push(self, &item, sizeof(T))
+  if (methodName == "push" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    {
+      auto ptrType = getPtrType();
+      auto i32Ty = builder.getIntegerType(32);
+      auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+      auto pushFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_push");
+      if (!pushFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(
+            voidTy, {ptrType, ptrType, i32Ty});
+        pushFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+            location, "__asc_vec_push", fnType);
+      }
+
+      // Store the item to a temporary alloca, pass its address.
+      mlir::Value item = args[1]; // second arg (first is receiver)
+      auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(64), static_cast<int64_t>(1));
+      auto itemAlloca = builder.create<mlir::LLVM::AllocaOp>(
+          location, ptrType, item.getType(), i64One);
+      builder.create<mlir::LLVM::StoreOp>(location, item, itemAlloca);
+
+      auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+          location, i32Ty,
+          static_cast<int64_t>(getTypeSize(item.getType())));
+
+      builder.create<mlir::LLVM::CallOp>(
+          location, pushFn,
+          mlir::ValueRange{receiver, itemAlloca, elemSize});
+      return {};
+    }
+  }
+
+  // Vec::get(index) → call __asc_vec_get(self, index, sizeof(T))
+  // Returns a pointer to the element (or null). Load the value.
+  if (methodName == "get" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    {
+      auto ptrType = getPtrType();
+      auto i32Ty = builder.getIntegerType(32);
+      auto i64Ty = builder.getIntegerType(64);
+
+      auto getFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_get");
+      if (!getFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(
+            ptrType, {ptrType, i64Ty, i32Ty});
+        getFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+            location, "__asc_vec_get", fnType);
+      }
+
+      mlir::Value index = args[1];
+      // Widen index to i64 if needed.
+      if (index.getType().isInteger(32))
+        index = builder.create<mlir::arith::ExtUIOp>(location, i64Ty, index);
+
+      auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+          location, i32Ty, static_cast<int64_t>(4)); // DECISION: default 4 bytes
+
+      mlir::OperationState getCallState(location, "llvm.call");
+      getCallState.addOperands(getFn.getOperation()->getResult(0));
+      // Actually use the declared function properly:
+      auto getCall = builder.create<mlir::LLVM::CallOp>(
+          location, getFn,
+          mlir::ValueRange{receiver, index, elemSize});
+
+      // Return the pointer (user will load from it or use in match).
+      return getCall.getResult();
     }
   }
 

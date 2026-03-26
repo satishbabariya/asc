@@ -12,6 +12,8 @@ if(CMAKE_C_COMPILER)
     wasi_clock.c
     wasi_random.c
     atomics.c
+    string_rt.c
+    vec_rt.c
   )
   target_compile_options(ascRuntime PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
