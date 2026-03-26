@@ -68,7 +68,29 @@ void Sema::analyze(std::vector<Decl *> &items) {
     }
   }
 
-  // Second pass: check all declarations.
+  // Second pass: register all function signatures (enables forward references).
+  for (auto *item : items) {
+    FunctionDecl *fd = nullptr;
+    if (auto *f = dynamic_cast<FunctionDecl *>(item))
+      fd = f;
+    else if (auto *ed = dynamic_cast<ExportDecl *>(item)) {
+      if (ed->getInner())
+        fd = dynamic_cast<FunctionDecl *>(ed->getInner());
+    }
+    if (fd) {
+      Symbol sym;
+      sym.name = fd->getName().str();
+      sym.decl = fd;
+      sym.type = fd->getReturnType();
+      if (!currentScope->declare(fd->getName(), std::move(sym))) {
+        diags.emitError(fd->getLocation(), DiagID::ErrDuplicateDeclaration,
+                        "duplicate function declaration '" +
+                        fd->getName().str() + "'");
+      }
+    }
+  }
+
+  // Third pass: check all declarations (bodies, types, etc.).
   for (auto *item : items)
     checkDecl(item);
 }

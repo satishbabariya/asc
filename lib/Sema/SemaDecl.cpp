@@ -3,14 +3,14 @@
 namespace asc {
 
 void Sema::checkFunctionDecl(FunctionDecl *d) {
-  // Register function in current scope.
-  Symbol sym;
-  sym.name = d->getName().str();
-  sym.decl = d;
-  sym.type = d->getReturnType();
-  if (!currentScope->declare(d->getName(), std::move(sym))) {
-    diags.emitError(d->getLocation(), DiagID::ErrDuplicateDeclaration,
-                    "duplicate function declaration '" + d->getName().str() + "'");
+  // Register function in current scope (skip if already pre-registered for
+  // forward reference support — the analyze() pre-pass registers names).
+  if (!currentScope->lookupLocal(d->getName())) {
+    Symbol sym;
+    sym.name = d->getName().str();
+    sym.decl = d;
+    sym.type = d->getReturnType();
+    currentScope->declare(d->getName(), std::move(sym));
   }
 
   // Check body.

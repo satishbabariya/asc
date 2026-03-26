@@ -1,6 +1,7 @@
 #include "asc/HIR/HIRBuilder.h"
 #include "asc/Basic/SourceManager.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -18,6 +19,7 @@ HIRBuilder::HIRBuilder(mlir::MLIRContext &mlirCtx, ASTContext &astCtx,
   mlirCtx.loadDialect<mlir::arith::ArithDialect>();
   mlirCtx.loadDialect<mlir::func::FuncDialect>();
   mlirCtx.loadDialect<mlir::scf::SCFDialect>();
+  mlirCtx.loadDialect<mlir::cf::ControlFlowDialect>();
   mlirCtx.loadDialect<mlir::LLVM::LLVMDialect>();
 }
 
@@ -290,6 +292,11 @@ mlir::Value HIRBuilder::visitFunctionDecl(FunctionDecl *d) {
                                                ? mlir::TypeRange()
                                                : mlir::TypeRange(retType));
 
+  // If a forward declaration exists (from a call before definition),
+  // erase it and create the real definition.
+  if (auto existing = module.lookupSymbol<mlir::func::FuncOp>(d->getName()))
+    existing.erase();
+
   auto funcOp =
       mlir::func::FuncOp::create(location, d->getName(), funcType);
   module.push_back(funcOp);
@@ -324,8 +331,16 @@ void HIRBuilder::emitFunctionBody(FunctionDecl *d,
     bool hasReturnType = funcOp.getFunctionType().getNumResults() > 0;
     if (hasReturnType && bodyResult) {
       // Implicit return of trailing expression.
+      // Fix: load struct from pointer if needed.
+      mlir::Value retVal = bodyResult;
+      mlir::Type expectedType = funcOp.getFunctionType().getResult(0);
+      if (mlir::isa<mlir::LLVM::LLVMStructType>(expectedType) &&
+          mlir::isa<mlir::LLVM::LLVMPointerType>(retVal.getType())) {
+        retVal = builder.create<mlir::LLVM::LoadOp>(
+            loc(d->getLocation()), expectedType, retVal);
+      }
       builder.create<mlir::func::ReturnOp>(loc(d->getLocation()),
-                                            mlir::ValueRange{bodyResult});
+                                            mlir::ValueRange{retVal});
     } else {
       builder.create<mlir::func::ReturnOp>(loc(d->getLocation()));
     }
@@ -418,10 +433,23 @@ mlir::Value HIRBuilder::visitReturnStmt(ReturnStmt *s) {
   auto location = loc(s->getLocation());
   if (s->getValue()) {
     mlir::Value val = visitExpr(s->getValue());
-    if (val)
+    if (val) {
+      // Fix 3: If returning a pointer to a struct but function expects
+      // struct by value, load the struct from the pointer.
+      if (currentFunction) {
+        auto funcType = currentFunction.getFunctionType();
+        if (funcType.getNumResults() > 0) {
+          mlir::Type expectedType = funcType.getResult(0);
+          if (mlir::isa<mlir::LLVM::LLVMStructType>(expectedType) &&
+              mlir::isa<mlir::LLVM::LLVMPointerType>(val.getType())) {
+            val = builder.create<mlir::LLVM::LoadOp>(location, expectedType, val);
+          }
+        }
+      }
       builder.create<mlir::func::ReturnOp>(location, mlir::ValueRange{val});
-    else
+    } else {
       builder.create<mlir::func::ReturnOp>(location);
+    }
   } else {
     builder.create<mlir::func::ReturnOp>(location);
   }
@@ -669,12 +697,26 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
     return callOp.getNumResults() > 0 ? callOp.getResult(0) : mlir::Value{};
   }
 
-  // DECISION: If function not found, create a forward declaration.
-  // Build type from arguments.
+  // Forward declaration: emit only if not already in module.
+  // The real definition will be emitted later when visiting the function decl.
   llvm::SmallVector<mlir::Type> argTypes;
   for (auto &a : args)
     argTypes.push_back(a.getType());
-  auto funcType = builder.getFunctionType(argTypes, {});
+
+  // Try to find the function declaration in Sema for return type info.
+  mlir::TypeRange retTypes;
+  mlir::Type retType;
+  if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getCallee())) {
+    if (auto *fd = dynamic_cast<FunctionDecl *>(ref->getResolvedDecl())) {
+      if (fd->getReturnType()) {
+        retType = convertType(fd->getReturnType());
+        if (retType && !retType.isa<mlir::NoneType>())
+          retTypes = mlir::TypeRange(retType);
+      }
+    }
+  }
+
+  auto funcType = builder.getFunctionType(argTypes, retTypes);
   auto forwardDecl =
       mlir::func::FuncOp::create(location, calleeName, funcType);
   forwardDecl.setPrivate();
@@ -697,72 +739,54 @@ mlir::Value HIRBuilder::visitIfExpr(IfExpr *e) {
         location, mlir::arith::CmpIPredicate::ne, cond, zero);
   }
 
-  // Use scf.if for if-as-expression when both branches exist.
+  // DECISION: Use cf.cond_br (control flow branching) instead of scf.if
+  // so that func.return works inside if/else branches.
   bool hasElse = e->getElseBlock() != nullptr;
-  bool hasResult = e->getThenBlock() && e->getThenBlock()->getTrailingExpr();
 
-  if (hasResult && hasElse) {
-    // Determine result type from then branch trailing expr.
-    mlir::Type resultType = convertType(e->getThenBlock()->getTrailingExpr()->getType());
-    if (!resultType || resultType.isa<mlir::NoneType>())
-      resultType = builder.getIntegerType(32);
+  auto *currentBlock = builder.getBlock();
+  auto *parentRegion = currentBlock->getParent();
 
-    auto ifOp = builder.create<mlir::scf::IfOp>(
-        location, mlir::TypeRange{resultType}, cond, /*hasElse=*/true);
+  auto *thenBlock = new mlir::Block();
+  auto *mergeBlock = new mlir::Block();
+  mlir::Block *elseBlock = hasElse ? new mlir::Block() : nullptr;
 
-    // Then region.
-    builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
-    pushScope();
-    mlir::Value thenVal = visitCompoundStmt(e->getThenBlock());
-    popScope();
-    if (thenVal)
-      builder.create<mlir::scf::YieldOp>(location, mlir::ValueRange{thenVal});
-    else
-      builder.create<mlir::scf::YieldOp>(location);
+  // Insert blocks after current.
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(currentBlock), thenBlock);
+  if (elseBlock)
+    parentRegion->getBlocks().insertAfter(
+        mlir::Region::iterator(thenBlock), elseBlock);
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(elseBlock ? elseBlock : thenBlock), mergeBlock);
 
-    // Else region.
-    builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
-    pushScope();
-    // The else block might be a CompoundStmt or an ExprStmt wrapping another IfExpr.
-    if (auto *es = dynamic_cast<ExprStmt *>(e->getElseBlock())) {
-      mlir::Value elseVal = visitExpr(es->getExpr());
-      if (elseVal)
-        builder.create<mlir::scf::YieldOp>(location, mlir::ValueRange{elseVal});
-      else
-        builder.create<mlir::scf::YieldOp>(location);
-    } else if (auto *cs = dynamic_cast<CompoundStmt *>(e->getElseBlock())) {
-      mlir::Value elseVal = visitCompoundStmt(cs);
-      if (elseVal)
-        builder.create<mlir::scf::YieldOp>(location, mlir::ValueRange{elseVal});
-      else
-        builder.create<mlir::scf::YieldOp>(location);
-    }
-    popScope();
+  // Conditional branch.
+  builder.create<mlir::cf::CondBranchOp>(
+      location, cond, thenBlock, /*trueArgs=*/mlir::ValueRange{},
+      hasElse ? elseBlock : mergeBlock, /*falseArgs=*/mlir::ValueRange{});
 
-    builder.setInsertionPointAfter(ifOp);
-    return ifOp.getResult(0);
-  }
-
-  // Void if: emit as scf.if without results.
-  auto ifOp = builder.create<mlir::scf::IfOp>(
-      location, mlir::TypeRange{}, cond, hasElse);
-
-  builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+  // Then block.
+  builder.setInsertionPointToStart(thenBlock);
   pushScope();
   if (e->getThenBlock())
     visitCompoundStmt(e->getThenBlock());
   popScope();
-  builder.create<mlir::scf::YieldOp>(location);
+  if (thenBlock->empty() ||
+      !thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+    builder.create<mlir::cf::BranchOp>(location, mergeBlock);
 
+  // Else block.
   if (hasElse) {
-    builder.setInsertionPointToStart(&ifOp.getElseRegion().front());
+    builder.setInsertionPointToStart(elseBlock);
     pushScope();
     visitStmt(e->getElseBlock());
     popScope();
-    builder.create<mlir::scf::YieldOp>(location);
+    if (elseBlock->empty() ||
+        !elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      builder.create<mlir::cf::BranchOp>(location, mergeBlock);
   }
 
-  builder.setInsertionPointAfter(ifOp);
+  // Continue in merge block.
+  builder.setInsertionPointToStart(mergeBlock);
   return {};
 }
 
@@ -1097,8 +1121,12 @@ mlir::Value HIRBuilder::visitCastExpr(CastExpr *e) {
   if (operand.getType().isIntOrIndex() && targetType.isIntOrIndex()) {
     unsigned srcWidth = operand.getType().getIntOrFloatBitWidth();
     unsigned dstWidth = targetType.getIntOrFloatBitWidth();
-    if (srcWidth < dstWidth)
+    if (srcWidth < dstWidth) {
+      // Fix 4: Use zero-extend for bool (i1→i32 gives 0 or 1, not -1).
+      if (srcWidth == 1)
+        return builder.create<mlir::arith::ExtUIOp>(location, targetType, operand);
       return builder.create<mlir::arith::ExtSIOp>(location, targetType, operand);
+    }
     if (srcWidth > dstWidth)
       return builder.create<mlir::arith::TruncIOp>(location, targetType, operand);
     return operand;
