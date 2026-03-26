@@ -122,6 +122,27 @@ mlir::Type HIRBuilder::convertStructType(StructDecl *sd) {
   return structType;
 }
 
+mlir::Type HIRBuilder::getEnumStructType(llvm::StringRef enumName) {
+  auto eit = sema.enumDecls.find(enumName);
+  if (eit == sema.enumDecls.end())
+    return {};
+  uint64_t maxPayload = 0;
+  for (auto *v : eit->second->getVariants()) {
+    uint64_t vSize = 0;
+    for (auto *t : v->getTupleTypes())
+      vSize += getTypeSize(convertType(t));
+    for (auto *f : v->getStructFields())
+      vSize += getTypeSize(convertType(f->getType()));
+    maxPayload = std::max(maxPayload, vSize);
+  }
+  if (maxPayload == 0) maxPayload = 1;
+  auto i32Ty = builder.getIntegerType(32);
+  auto i8Ty = builder.getIntegerType(8);
+  auto payloadTy = mlir::LLVM::LLVMArrayType::get(i8Ty, maxPayload);
+  return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {i32Ty, payloadTy});
+}
+
+
 mlir::Type HIRBuilder::convertType(asc::Type *astType) {
   if (!astType)
     return builder.getNoneType();
@@ -170,25 +191,11 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
     if (sit != sema.structDecls.end())
       return convertStructType(sit->second);
 
-    // Check for enum — represent as tagged union.
+    // Check for enum — always use pointer (enums are stack-allocated tagged unions).
+    // DECISION: Enums always passed as pointers since they live in alloca.
     auto eit = sema.enumDecls.find(name);
     if (eit != sema.enumDecls.end()) {
-      // DECISION: Enums lowered as { tag: i32, payload: [max_size x i8] }.
-      // Compute max variant payload size.
-      uint64_t maxPayload = 0;
-      for (auto *v : eit->second->getVariants()) {
-        uint64_t vSize = 0;
-        for (auto *t : v->getTupleTypes())
-          vSize += getTypeSize(convertType(t));
-        for (auto *f : v->getStructFields())
-          vSize += getTypeSize(convertType(f->getType()));
-        maxPayload = std::max(maxPayload, vSize);
-      }
-      if (maxPayload == 0) maxPayload = 1;
-      auto i32Ty = builder.getIntegerType(32);
-      auto i8Ty = builder.getIntegerType(8);
-      auto payloadTy = mlir::LLVM::LLVMArrayType::get(i8Ty, maxPayload);
-      return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {i32Ty, payloadTy});
+      return getPtrType();
     }
 
     // Well-known standard types.
@@ -795,9 +802,7 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         }
         if (variantIdx >= 0 && variant) {
           // Construct enum tagged union with payload.
-          auto *namedType = astCtx.create<NamedType>(
-              segs[0], std::vector<asc::Type *>{}, SourceLocation());
-          mlir::Type enumType = convertType(namedType);
+          mlir::Type enumType = getEnumStructType(segs[0]);
           auto ptrType = getPtrType();
           auto i32Ty = builder.getIntegerType(32);
           auto i64One = builder.create<mlir::LLVM::ConstantOp>(
@@ -1555,14 +1560,17 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
     if (auto allocaOp = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp))
       enumMLIRTypeForGEP = allocaOp.getElemType();
   }
-  // Fallback: try AST type.
-  if (!enumMLIRTypeForGEP) {
+  // Fallback: try AST type → getEnumStructType.
+  if (!enumMLIRTypeForGEP ||
+      !mlir::isa<mlir::LLVM::LLVMStructType>(enumMLIRTypeForGEP)) {
     asc::Type *scrutAstType = e->getScrutinee()->getType();
     if (scrutAstType) {
       asc::Type *inner = scrutAstType;
       if (auto *ot = dynamic_cast<OwnType *>(scrutAstType)) inner = ot->getInner();
       if (auto *rt = dynamic_cast<RefType *>(scrutAstType)) inner = rt->getInner();
-      enumMLIRTypeForGEP = convertType(inner);
+      if (auto *nt = dynamic_cast<NamedType *>(inner)) {
+        enumMLIRTypeForGEP = getEnumStructType(nt->getName());
+      }
     }
   }
 
@@ -1586,7 +1594,14 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
                                                          scrutinee);
     }
   } else {
-    discriminant = scrutinee;
+    // Scrutinee is a scalar or struct by value.
+    // If it's a struct (enum by value), extract the tag field.
+    if (mlir::isa<mlir::LLVM::LLVMStructType>(scrutinee.getType())) {
+      discriminant = builder.create<mlir::LLVM::ExtractValueOp>(
+          location, scrutinee, 0);
+    } else {
+      discriminant = scrutinee;
+    }
   }
 
   // Build match as a chain of cf.cond_br arms.
@@ -2067,10 +2082,8 @@ mlir::Value HIRBuilder::visitPathExpr(PathExpr *e) {
         }
       }
       if (variantIdx >= 0) {
-        // Get the enum MLIR type.
-        auto *namedType = astCtx.create<NamedType>(
-            segments[0], std::vector<asc::Type *>{}, SourceLocation());
-        mlir::Type enumType = convertType(namedType);
+        // Get the enum struct type for alloca.
+        mlir::Type enumType = getEnumStructType(segments[0]);
         auto ptrType = getPtrType();
         auto i64One = builder.create<mlir::LLVM::ConstantOp>(
             location, builder.getIntegerType(64), static_cast<int64_t>(1));

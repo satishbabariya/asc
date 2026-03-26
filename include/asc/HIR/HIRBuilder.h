@@ -177,6 +177,9 @@ private:
 
   /// Get the size of a type in bytes for the target.
   uint64_t getTypeSize(mlir::Type type);
+
+  /// Get the LLVM tagged union struct type for an enum (for GEP indexing).
+  mlir::Type getEnumStructType(llvm::StringRef enumName);
 };
 
 } // namespace asc
