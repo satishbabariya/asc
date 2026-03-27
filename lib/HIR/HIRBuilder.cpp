@@ -995,6 +995,26 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
                                                mlir::ValueRange{elemSize}).getResult();
   }
 
+  // HashMap::new() — create empty hash map.
+  if (calleeName == "HashMap_new" || calleeName == "HashMap::new") {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto hmNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_new");
+    if (!hmNewFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i32Ty, i32Ty});
+      hmNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_hashmap_new", fnType);
+    }
+    auto keySize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4)); // default i32 keys
+    auto valSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4)); // default i32 values
+    return builder.create<mlir::LLVM::CallOp>(
+        location, hmNewFn, mlir::ValueRange{keySize, valSize}).getResult();
+  }
+
   // Box::new(value) — heap allocation.
   if (calleeName == "Box_new" || calleeName == "Box::new") {
     if (!args.empty()) {
@@ -1769,6 +1789,78 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       // Return the pointer (user will load from it or use in match).
       return getCall.getResult();
     }
+  }
+
+  // HashMap::insert(key, value) → __asc_hashmap_insert(self, &key, &val)
+  if (methodName == "insert" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() >= 3) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    auto insertFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_insert");
+    if (!insertFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, ptrType, ptrType});
+      insertFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_hashmap_insert", fnType);
+    }
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto keyAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, args[1].getType(), i64One);
+    builder.create<mlir::LLVM::StoreOp>(location, args[1], keyAlloca);
+    auto valAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, args[2].getType(), i64One);
+    builder.create<mlir::LLVM::StoreOp>(location, args[2], valAlloca);
+    builder.create<mlir::LLVM::CallOp>(
+        location, insertFn, mlir::ValueRange{receiver, keyAlloca, valAlloca});
+    return {};
+  }
+
+  // HashMap::get(key) → __asc_hashmap_get(self, &key), returns ptr or null
+  if (methodName == "get" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() >= 2) {
+    auto ptrType = getPtrType();
+    auto getFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_get");
+    if (!getFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, ptrType});
+      getFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_hashmap_get", fnType);
+    }
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto keyAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, args[1].getType(), i64One);
+    builder.create<mlir::LLVM::StoreOp>(location, args[1], keyAlloca);
+    auto result = builder.create<mlir::LLVM::CallOp>(
+        location, getFn, mlir::ValueRange{receiver, keyAlloca});
+    return result.getResult();
+  }
+
+  // HashMap::contains(key) → __asc_hashmap_contains(self, &key)
+  if (methodName == "contains" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() >= 2) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto containsFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_contains");
+    if (!containsFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrType, ptrType});
+      containsFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_hashmap_contains", fnType);
+    }
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto keyAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, args[1].getType(), i64One);
+    builder.create<mlir::LLVM::StoreOp>(location, args[1], keyAlloca);
+    auto result = builder.create<mlir::LLVM::CallOp>(
+        location, containsFn, mlir::ValueRange{receiver, keyAlloca});
+    return result.getResult();
   }
 
   // Try looking up as mangled name: TypeName_method or just method.

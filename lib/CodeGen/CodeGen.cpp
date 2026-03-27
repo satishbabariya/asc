@@ -265,32 +265,51 @@ void CodeGenerator::addDebugInfo() {
   // Create a DIBuilder for the module.
   llvm::DIBuilder dib(*llvmModule);
 
-  // Compile unit.
-  auto *file = dib.createFile(
-      opts.outputFile.empty() ? "<stdin>" : opts.outputFile, ".");
+  // Use the input source file for debug info.
+  std::string srcFile = opts.outputFile;
+  std::string srcDir = ".";
+  // Try to get the actual source file from the module metadata or opts.
+  if (srcFile.empty()) srcFile = "<stdin>";
+  auto *file = dib.createFile(srcFile, srcDir);
   auto *cu = dib.createCompileUnit(
       llvm::dwarf::DW_LANG_C, file, "asc 0.1.0",
       opts.optLevel != OptLevel::O0, /*Flags=*/"", /*RV=*/0);
 
   // Add subprogram info for each function.
+  unsigned funcLine = 1;
   for (auto &func : *llvmModule) {
     if (func.isDeclaration())
       continue;
 
+    // Try to get a real line number from the first instruction's debug loc.
+    unsigned startLine = funcLine++;
+    for (auto &bb : func) {
+      for (auto &inst : bb) {
+        if (auto dl = inst.getDebugLoc()) {
+          startLine = dl.getLine();
+          break;
+        }
+      }
+      break;
+    }
+
     auto *funcType = dib.createSubroutineType(dib.getOrCreateTypeArray({}));
     auto *sp = dib.createFunction(
         file, func.getName(), func.getName(), file,
-        /*LineNo=*/1, funcType, /*ScopeLine=*/1,
+        startLine, funcType, startLine,
         llvm::DINode::FlagPrototyped,
         llvm::DISubprogram::SPFlagDefinition);
     func.setSubprogram(sp);
 
-    // Set debug location on all instructions.
+    // Set debug location on instructions that don't already have one.
+    unsigned lastLine = startLine;
     for (auto &bb : func) {
       for (auto &inst : bb) {
-        if (!inst.getDebugLoc()) {
+        if (auto dl = inst.getDebugLoc()) {
+          lastLine = dl.getLine();
+        } else {
           inst.setDebugLoc(llvm::DILocation::get(
-              llvmContext, /*Line=*/1, /*Col=*/0, sp));
+              llvmContext, lastLine, 0, sp));
         }
       }
     }
