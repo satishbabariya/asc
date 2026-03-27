@@ -1075,8 +1075,11 @@ mlir::Value HIRBuilder::visitIfExpr(IfExpr *e) {
   if (e->getThenBlock())
     visitCompoundStmt(e->getThenBlock());
   popScope();
-  if (thenBlock->empty() ||
-      !thenBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+  // After visiting the then body, the builder may be in a different block
+  // (e.g., a while-loop exit block). Add branch to merge from wherever we are.
+  auto *thenEnd = builder.getBlock();
+  if (thenEnd->empty() ||
+      !thenEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
     builder.create<mlir::cf::BranchOp>(location, mergeBlock);
 
   // Else block.
@@ -1085,8 +1088,9 @@ mlir::Value HIRBuilder::visitIfExpr(IfExpr *e) {
     pushScope();
     visitStmt(e->getElseBlock());
     popScope();
-    if (elseBlock->empty() ||
-        !elseBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
+    auto *elseEnd = builder.getBlock();
+    if (elseEnd->empty() ||
+        !elseEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
       builder.create<mlir::cf::BranchOp>(location, mergeBlock);
   }
 
@@ -1196,6 +1200,54 @@ mlir::Value HIRBuilder::visitAssignExpr(AssignExpr *e) {
           return {};
         }
       }
+    }
+  }
+
+  // Array index assignment: arr[idx] = value
+  if (auto *indexExpr = dynamic_cast<IndexExpr *>(e->getTarget())) {
+    // Get the base pointer without loading.
+    mlir::Value basePtr;
+    if (auto *baseRef = dynamic_cast<DeclRefExpr *>(indexExpr->getBase())) {
+      basePtr = lookup(baseRef->getName());
+      // If alloca-backed mutable var holding a pointer, load the pointer.
+      if (basePtr) {
+        auto *defOp = basePtr.getDefiningOp();
+        if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
+          auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
+          mlir::Type elemType = allocaOp.getElemType();
+          if (elemType && mlir::isa<mlir::LLVM::LLVMPointerType>(elemType)) {
+            basePtr = builder.create<mlir::LLVM::LoadOp>(location, elemType, basePtr);
+          }
+        }
+      }
+    } else {
+      basePtr = visitExpr(indexExpr->getBase());
+    }
+    mlir::Value index = visitExpr(indexExpr->getIndex());
+    if (basePtr && index) {
+      auto ptrType = getPtrType();
+      // Determine array type for proper GEP.
+      asc::Type *baseAstType = indexExpr->getBase()->getType();
+      unsigned arraySize = 0;
+      mlir::Type elemMLIRType = rhs.getType();
+      if (auto *at = dynamic_cast<ArrayType *>(baseAstType))
+        arraySize = at->getSize();
+
+      if (arraySize > 0) {
+        auto arrayType = mlir::LLVM::LLVMArrayType::get(elemMLIRType, arraySize);
+        auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(32), static_cast<int64_t>(0));
+        auto elemPtr = builder.create<mlir::LLVM::GEPOp>(
+            location, ptrType, arrayType, basePtr,
+            mlir::ValueRange{i32Zero, index});
+        builder.create<mlir::LLVM::StoreOp>(location, rhs, elemPtr);
+      } else {
+        auto elemPtr = builder.create<mlir::LLVM::GEPOp>(
+            location, ptrType, elemMLIRType, basePtr,
+            mlir::ValueRange{index});
+        builder.create<mlir::LLVM::StoreOp>(location, rhs, elemPtr);
+      }
+      return {};
     }
   }
 

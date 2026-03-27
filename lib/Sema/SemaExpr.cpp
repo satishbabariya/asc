@@ -711,22 +711,19 @@ Type *Sema::checkIfExpr(IfExpr *e) {
                     "if condition must be bool");
   }
 
-  pushScope();
-  Type *thenType = nullptr;
+  // checkCompoundStmt manages its own scope and checks the trailing expression.
+  // Do NOT re-check the trailing expression here — that would evaluate it
+  // after the compound scope is popped, causing in-block variables to be
+  // invisible.
   if (e->getThenBlock()) {
     checkCompoundStmt(e->getThenBlock());
-    if (e->getThenBlock()->getTrailingExpr())
-      thenType = checkExpr(e->getThenBlock()->getTrailingExpr());
   }
-  popScope();
 
   if (e->getElseBlock()) {
-    pushScope();
     checkStmt(e->getElseBlock());
-    popScope();
   }
 
-  return thenType;
+  return ctx.getVoidType();
 }
 
 Type *Sema::checkBlockExpr(BlockExpr *e) {
