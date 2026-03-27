@@ -492,6 +492,36 @@ Expr *Parser::parsePrimaryExpr() {
         return ctx.create<CallExpr>(path, std::move(args),
                                     std::vector<Type *>{}, loc);
       }
+      // Path with struct literal: Enum::Variant { field: value, ... }
+      if (tok.is(tok::l_brace)) {
+        // Treat as a struct literal with the path as the type name.
+        // Use the last segment as the struct name for StructLiteral.
+        std::string structName = segments.back();
+        advance(); // consume {
+        std::vector<FieldInit> fields;
+        while (!tok.is(tok::r_brace) && !tok.is(tok::eof)) {
+          FieldInit fi;
+          fi.loc = tok.getLocation();
+          if (!tok.is(tok::identifier)) {
+            error("expected field name");
+            break;
+          }
+          fi.name = tok.getSpelling().str();
+          advance();
+          if (consume(tok::colon)) {
+            fi.value = parseExpr();
+          } else {
+            fi.value = nullptr; // shorthand
+          }
+          fields.push_back(std::move(fi));
+          if (!consume(tok::comma))
+            break;
+        }
+        expect(tok::r_brace);
+        // Store as struct literal; Sema can resolve the variant.
+        return ctx.create<StructLiteral>(std::move(structName),
+                                         std::move(fields), nullptr, loc);
+      }
       return ctx.create<PathExpr>(std::move(segments),
                                   std::vector<Type *>{}, loc);
     }

@@ -1,19 +1,22 @@
-// End-to-end test: enums and pattern matching.
+// End-to-end test: enums and pattern matching with tuple variants.
 
 enum Shape {
-  Circle { radius: f64 },
-  Rect { width: f64, height: f64 },
+  Circle(f64),
+  Rect(f64, f64),
 }
 
-function area(shape: ref<Shape>): f64 {
-  match shape {
-    Shape::Circle { radius } => 3.14159 * radius * radius,
-    Shape::Rect { width, height } => width * height,
-  }
+function classify(shape: Shape): i32 {
+  return match shape {
+    Shape::Circle(r) => 1,
+    Shape::Rect(w, h) => 2,
+    _ => 0,
+  };
 }
 
 function main(): i32 {
-  const c = Shape::Circle { radius: 5.0 };
-  const r = Shape::Rect { width: 3.0, height: 4.0 };
-  return 0;
+  let c = Shape::Circle(5.0);
+  let r = Shape::Rect(3.0, 4.0);
+  let a: i32 = classify(c);
+  let b: i32 = classify(r);
+  return a + b;
 }

@@ -477,8 +477,8 @@ Pattern *Parser::parsePattern() {
       return ctx.create<EnumPattern>(std::move(path), std::move(args), loc);
     }
 
-    // Struct pattern: Name { field: pattern, ... }
-    if (tok.is(tok::l_brace) && path.size() == 1) {
+    // Struct pattern: Name { field: pattern, ... } or Enum::Variant { field, ... }
+    if (tok.is(tok::l_brace)) {
       advance();
       std::vector<FieldPattern> fields;
       while (!tok.is(tok::r_brace) && !tok.is(tok::eof)) {
@@ -493,7 +493,19 @@ Pattern *Parser::parsePattern() {
           break;
       }
       expect(tok::r_brace);
-      return ctx.create<StructPattern>(path[0], std::move(fields), loc);
+      if (path.size() == 1) {
+        return ctx.create<StructPattern>(path[0], std::move(fields), loc);
+      }
+      // Enum struct pattern: convert field names to IdentPattern args
+      // for EnumPattern compatibility.
+      std::vector<Pattern *> args;
+      for (auto &f : fields) {
+        if (f.pattern)
+          args.push_back(f.pattern);
+        else
+          args.push_back(ctx.create<IdentPattern>(f.name, false, f.loc));
+      }
+      return ctx.create<EnumPattern>(std::move(path), std::move(args), loc);
     }
 
     // Simple identifier or enum path without args

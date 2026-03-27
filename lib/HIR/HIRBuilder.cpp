@@ -66,16 +66,19 @@ mlir::Type HIRBuilder::convertBuiltinType(BuiltinTypeKind kind) {
   case BuiltinTypeKind::I32:   return builder.getIntegerType(32);
   case BuiltinTypeKind::I64:   return builder.getIntegerType(64);
   case BuiltinTypeKind::I128:  return builder.getIntegerType(128);
-  case BuiltinTypeKind::U8:    return builder.getIntegerType(8, /*isSigned=*/false);
-  case BuiltinTypeKind::U16:   return builder.getIntegerType(16, false);
-  case BuiltinTypeKind::U32:   return builder.getIntegerType(32, false);
-  case BuiltinTypeKind::U64:   return builder.getIntegerType(64, false);
-  case BuiltinTypeKind::U128:  return builder.getIntegerType(128, false);
+  // DECISION: Use signless integer types for ALL unsigned types.
+  // LLVM dialect requires signless integers — unsigned (ui8/ui64) creates
+  // unrealized_conversion_cast errors during func-to-LLVM lowering.
+  case BuiltinTypeKind::U8:    return builder.getIntegerType(8);
+  case BuiltinTypeKind::U16:   return builder.getIntegerType(16);
+  case BuiltinTypeKind::U32:   return builder.getIntegerType(32);
+  case BuiltinTypeKind::U64:   return builder.getIntegerType(64);
+  case BuiltinTypeKind::U128:  return builder.getIntegerType(128);
   case BuiltinTypeKind::F32:   return builder.getF32Type();
   case BuiltinTypeKind::F64:   return builder.getF64Type();
   case BuiltinTypeKind::Bool:  return builder.getI1Type();
   case BuiltinTypeKind::Char:  return builder.getIntegerType(32);
-  case BuiltinTypeKind::USize: return builder.getIntegerType(64, false);
+  case BuiltinTypeKind::USize: return builder.getIntegerType(64);
   case BuiltinTypeKind::ISize: return builder.getIntegerType(64);
   case BuiltinTypeKind::Void:  return builder.getNoneType();
   case BuiltinTypeKind::Never: return builder.getNoneType();
@@ -463,10 +466,20 @@ mlir::Value HIRBuilder::visitEnumVariantDecl(EnumVariantDecl *) { return {}; }
 
 mlir::Value HIRBuilder::visitCompoundStmt(CompoundStmt *s) {
   mlir::Value last;
-  for (auto *stmt : s->getStmts())
+  for (auto *stmt : s->getStmts()) {
+    // Skip statements after a terminator (e.g., after return, break, panic).
+    auto *blk = builder.getBlock();
+    if (blk && !blk->empty() &&
+        blk->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      break;
     last = visitStmt(stmt);
-  if (s->getTrailingExpr())
-    last = visitExpr(s->getTrailingExpr());
+  }
+  if (s->getTrailingExpr()) {
+    auto *blk = builder.getBlock();
+    if (!blk || blk->empty() ||
+        !blk->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      last = visitExpr(s->getTrailingExpr());
+  }
   return last;
 }
 
@@ -2698,12 +2711,41 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
                                                          "__asc_panic", fnType);
     }
 
-    auto null = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+    // Get panic message from first argument or use default.
+    std::string panicMsg = "explicit panic";
+    if (name == "todo") panicMsg = "not yet implemented";
+    else if (name == "unimplemented") panicMsg = "not implemented";
+    else if (name == "unreachable") panicMsg = "entered unreachable code";
+    if (!e->getArgs().empty()) {
+      if (auto *sl = dynamic_cast<StringLiteral *>(e->getArgs()[0]))
+        panicMsg = sl->getValue().str();
+    }
+
+    // Create global string constant for panic message.
+    static unsigned panicMsgCounter = 0;
+    std::string globalName = "__panic_msg_" + std::to_string(panicMsgCounter++);
+    {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto strAttr = builder.getStringAttr(panicMsg);
+      auto arrType = mlir::LLVM::LLVMArrayType::get(
+          builder.getIntegerType(8), panicMsg.size());
+      builder.create<mlir::LLVM::GlobalOp>(
+          location, arrType, /*isConstant=*/true,
+          mlir::LLVM::Linkage::Internal, globalName, strAttr);
+    }
+    auto msgPtr = builder.create<mlir::LLVM::AddressOfOp>(
+        location, ptrType, globalName);
+    auto msgLen = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Type, static_cast<int64_t>(panicMsg.size()));
+
+    // Get source file/line info.
+    auto fileNull = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
     auto zero = builder.create<mlir::LLVM::ConstantOp>(
         location, i32Type, static_cast<int64_t>(0));
     builder.create<mlir::LLVM::CallOp>(
         location, panicFn,
-        mlir::ValueRange{null, zero, null, zero, zero, zero});
+        mlir::ValueRange{msgPtr, msgLen, fileNull, zero, zero, zero});
     builder.create<mlir::LLVM::UnreachableOp>(location);
     return {};
   }

@@ -502,8 +502,26 @@ Type *Sema::checkMatchExpr(MatchExpr *e) {
           if (eit != enumDecls.end()) {
             for (auto *v : eit->second->getVariants()) {
               if (v->getName() == path.back()) {
-                payloadTypes = std::vector<Type *>(
-                    v->getTupleTypes().begin(), v->getTupleTypes().end());
+                // Tuple variants: types from tupleTypes
+                if (!v->getTupleTypes().empty()) {
+                  payloadTypes = std::vector<Type *>(
+                      v->getTupleTypes().begin(), v->getTupleTypes().end());
+                }
+                // Struct variants: types from structFields (by field name)
+                if (!v->getStructFields().empty()) {
+                  // Map field names to types for named binding.
+                  for (unsigned ai = 0; ai < ep->getArgs().size(); ++ai) {
+                    if (auto *innerIp = dynamic_cast<IdentPattern *>(ep->getArgs()[ai])) {
+                      // Find the struct field matching this pattern name.
+                      for (auto *sf : v->getStructFields()) {
+                        if (sf->getName() == innerIp->getName()) {
+                          payloadTypes.push_back(sf->getType());
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
                 break;
               }
             }
@@ -513,7 +531,6 @@ Type *Sema::checkMatchExpr(MatchExpr *e) {
           if (auto *innerIp = dynamic_cast<IdentPattern *>(ep->getArgs()[ai])) {
             Symbol sym;
             sym.name = innerIp->getName().str();
-            // Use the actual payload type if known, else fall back to scrutinee type.
             sym.type = (ai < payloadTypes.size()) ? payloadTypes[ai] : scrutType;
             currentScope->declare(innerIp->getName(), std::move(sym));
           }
@@ -624,38 +641,51 @@ Type *Sema::checkCastExpr(CastExpr *e) {
 
 Type *Sema::checkStructLiteral(StructLiteral *e) {
   auto it = structDecls.find(e->getTypeName());
-  if (it == structDecls.end()) {
-    diags.emitError(e->getLocation(), DiagID::ErrUndeclaredIdentifier,
-                    "unknown struct type '" + e->getTypeName().str() + "'");
-    return nullptr;
-  }
-  StructDecl *sd = it->second;
-
-  // Check field types.
-  for (const auto &fi : e->getFields()) {
-    if (fi.value)
-      checkExpr(fi.value);
-    // Verify field exists.
-    bool found = false;
-    for (auto *field : sd->getFields()) {
-      if (field->getName() == fi.name) {
-        found = true;
-        break;
+  if (it != structDecls.end()) {
+    StructDecl *sd = it->second;
+    // Check field types.
+    for (const auto &fi : e->getFields()) {
+      if (fi.value)
+        checkExpr(fi.value);
+      bool found = false;
+      for (auto *field : sd->getFields()) {
+        if (field->getName() == fi.name) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        diags.emitError(fi.loc, DiagID::ErrUndeclaredIdentifier,
+                        "no field '" + fi.name + "' on struct '" +
+                        e->getTypeName().str() + "'");
       }
     }
-    if (!found) {
-      diags.emitError(fi.loc, DiagID::ErrUndeclaredIdentifier,
-                      "no field '" + fi.name + "' on struct '" +
-                      e->getTypeName().str() + "'");
+    if (e->getSpreadExpr())
+      checkExpr(e->getSpreadExpr());
+    markExprOwnership(e, OwnershipKind::Owned);
+    return ctx.create<NamedType>(e->getTypeName().str(), std::vector<Type *>{},
+                                 e->getLocation());
+  }
+
+  // Check if it's an enum variant name (struct variant).
+  for (auto &[enumName, enumDecl] : enumDecls) {
+    for (auto *variant : enumDecl->getVariants()) {
+      if (variant->getName() == e->getTypeName()) {
+        // Check field types against variant struct fields.
+        for (const auto &fi : e->getFields()) {
+          if (fi.value)
+            checkExpr(fi.value);
+        }
+        markExprOwnership(e, OwnershipKind::Owned);
+        return ctx.create<NamedType>(enumName.str(), std::vector<Type *>{},
+                                     e->getLocation());
+      }
     }
   }
 
-  if (e->getSpreadExpr())
-    checkExpr(e->getSpreadExpr());
-
-  markExprOwnership(e, OwnershipKind::Owned);
-  return ctx.create<NamedType>(e->getTypeName().str(), std::vector<Type *>{},
-                               e->getLocation());
+  diags.emitError(e->getLocation(), DiagID::ErrUndeclaredIdentifier,
+                  "unknown struct type '" + e->getTypeName().str() + "'");
+  return nullptr;
 }
 
 Type *Sema::checkTupleLiteral(TupleLiteral *e) {
