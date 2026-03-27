@@ -331,14 +331,21 @@ Type *Parser::parsePrimaryType() {
     std::vector<Type *> genericArgs;
     if (tok.is(tok::less)) {
       advance();
-      while (!tok.is(tok::greater) && !tok.is(tok::eof)) {
+      while (!tok.is(tok::greater) && !tok.is(tok::greatergreater) &&
+             !tok.is(tok::eof)) {
         Type *arg = parseType();
         if (arg)
           genericArgs.push_back(arg);
         if (!consume(tok::comma))
           break;
       }
-      expect(tok::greater);
+      // Handle >> as two > tokens for nested generics (e.g., Vec<Option<T>>).
+      if (tok.is(tok::greatergreater)) {
+        // Split >> into > + >: consume the >> and re-inject a single >.
+        tok = Token(tok::greater, tok.getLocation(), ">");
+      } else {
+        expect(tok::greater);
+      }
     }
 
     if (segments.size() == 1)
