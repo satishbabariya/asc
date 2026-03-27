@@ -173,6 +173,9 @@ private:
   };
   std::vector<LoopContext> loopStack;
 
+  /// Active type parameter substitutions for generic monomorphization.
+  llvm::StringMap<mlir::Type> typeSubstitutions;
+
   /// Cache of MLIR struct types by name to avoid re-creation.
   llvm::StringMap<mlir::Type> structTypeCache;
 

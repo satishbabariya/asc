@@ -222,6 +222,11 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
       return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {i32Ty, i32Ty});
     }
 
+    // Check type parameter substitutions (for generic monomorphization).
+    auto subIt = typeSubstitutions.find(name);
+    if (subIt != typeSubstitutions.end())
+      return subIt->second;
+
     // Unknown named type: use opaque pointer.
     return getPtrType();
   }
@@ -286,6 +291,10 @@ mlir::Value HIRBuilder::emitBorrowMut(mlir::Value owned,
 // --- Decl visitors ---
 
 mlir::Value HIRBuilder::visitFunctionDecl(FunctionDecl *d) {
+  // Skip generic functions — they're monomorphized at call sites.
+  if (d->isGeneric())
+    return {};
+
   auto location = loc(d->getLocation());
 
   // Build function type.
@@ -1000,6 +1009,78 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
       return heapPtr;
     }
     return {};
+  }
+
+  // Generic function monomorphization: if callee is generic, emit a
+  // specialized version with concrete types substituted for type parameters.
+  if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getCallee())) {
+    if (auto *fnDecl = dynamic_cast<FunctionDecl *>(ref->getResolvedDecl())) {
+      if (fnDecl->isGeneric() && !args.empty()) {
+        // Infer type parameters from argument MLIR types.
+        auto &gparams = fnDecl->getGenericParams();
+        auto &fparams = fnDecl->getParams();
+        llvm::StringMap<mlir::Type> subs;
+        std::string mangledSuffix;
+        for (unsigned i = 0; i < args.size() && i < fparams.size(); ++i) {
+          if (auto *nt = dynamic_cast<NamedType *>(fparams[i].type)) {
+            for (auto &gp : gparams) {
+              if (gp.name == nt->getName()) {
+                subs[gp.name] = args[i].getType();
+                break;
+              }
+            }
+          }
+          if (auto *ot = dynamic_cast<OwnType *>(fparams[i].type)) {
+            if (auto *nt = dynamic_cast<NamedType *>(ot->getInner())) {
+              for (auto &gp : gparams) {
+                if (gp.name == nt->getName()) {
+                  subs[gp.name] = args[i].getType();
+                  break;
+                }
+              }
+            }
+          }
+        }
+        // Build mangled name: identity_i32
+        for (auto &gp : gparams) {
+          auto it = subs.find(gp.name);
+          if (it != subs.end()) {
+            mangledSuffix += "_";
+            llvm::raw_string_ostream os(mangledSuffix);
+            it->second.print(os);
+          }
+        }
+        std::string monoName = calleeName + mangledSuffix;
+
+        // Check if already emitted.
+        auto monoCallee = module.lookupSymbol<mlir::func::FuncOp>(monoName);
+        if (!monoCallee) {
+          // Set up type substitutions and emit the function.
+          auto savedSubs = typeSubstitutions;
+          typeSubstitutions = std::move(subs);
+          auto savedIP = builder.saveInsertionPoint();
+          builder.setInsertionPointToEnd(module.getBody());
+
+          llvm::SmallVector<mlir::Type> monoParamTypes;
+          for (const auto &param : fnDecl->getParams())
+            monoParamTypes.push_back(convertType(param.type));
+          mlir::Type monoRetType = convertType(fnDecl->getReturnType());
+          auto monoFuncType = builder.getFunctionType(
+              monoParamTypes, monoRetType.isa<mlir::NoneType>()
+                  ? mlir::TypeRange() : mlir::TypeRange(monoRetType));
+
+          monoCallee = mlir::func::FuncOp::create(
+              location, monoName, monoFuncType);
+          module.push_back(monoCallee);
+          if (fnDecl->getBody())
+            emitFunctionBody(fnDecl, monoCallee);
+
+          typeSubstitutions = std::move(savedSubs);
+          builder.restoreInsertionPoint(savedIP);
+        }
+        calleeName = monoName;
+      }
+    }
   }
 
   // Look up function in module.

@@ -327,6 +327,55 @@ Type *Sema::checkCallExpr(CallExpr *e) {
     }
 
     Type *retType = fnDecl->getReturnType();
+
+    // Generic function monomorphization: infer type parameters from arguments.
+    if (fnDecl->isGeneric() && !fnDecl->getGenericParams().empty()) {
+      // Build type parameter → concrete type map from argument types.
+      llvm::StringMap<Type *> typeParamMap;
+      auto &gparams = fnDecl->getGenericParams();
+      auto &fparams = fnDecl->getParams();
+      for (unsigned i = 0; i < args.size() && i < fparams.size(); ++i) {
+        Type *paramType = fparams[i].type;
+        Type *argType = args[i]->getType();
+        if (!paramType || !argType) continue;
+        // Check if param type is a type parameter (NamedType matching a generic param).
+        if (auto *nt = dynamic_cast<NamedType *>(paramType)) {
+          for (auto &gp : gparams) {
+            if (gp.name == nt->getName()) {
+              typeParamMap[gp.name] = argType;
+              break;
+            }
+          }
+        }
+        // Check through own<T> wrapper.
+        if (auto *ot = dynamic_cast<OwnType *>(paramType)) {
+          if (auto *nt = dynamic_cast<NamedType *>(ot->getInner())) {
+            for (auto &gp : gparams) {
+              if (gp.name == nt->getName()) {
+                typeParamMap[gp.name] = argType;
+                break;
+              }
+            }
+          }
+        }
+      }
+      // Substitute return type: if return type is a generic parameter, replace it.
+      if (retType) {
+        if (auto *nt = dynamic_cast<NamedType *>(retType)) {
+          auto it = typeParamMap.find(nt->getName());
+          if (it != typeParamMap.end())
+            retType = it->second;
+        }
+        if (auto *ot = dynamic_cast<OwnType *>(retType)) {
+          if (auto *nt = dynamic_cast<NamedType *>(ot->getInner())) {
+            auto it = typeParamMap.find(nt->getName());
+            if (it != typeParamMap.end())
+              retType = it->second;
+          }
+        }
+      }
+    }
+
     // Return value ownership: if own<T>, mark as Owned; else Copied.
     if (retType && dynamic_cast<OwnType *>(retType))
       markExprOwnership(e, OwnershipKind::Owned);
