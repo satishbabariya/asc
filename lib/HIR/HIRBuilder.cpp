@@ -806,8 +806,20 @@ mlir::Value HIRBuilder::visitUnaryExpr(UnaryExpr *e) {
       return operand;
     return emitBorrowRef(operand, location);
   }
-  case UnaryOp::Deref:
-    return operand; // Deref lowers to pointer load in codegen.
+  case UnaryOp::Deref: {
+    // Dereference a pointer: load the value it points to.
+    if (mlir::isa<mlir::LLVM::LLVMPointerType>(operand.getType())) {
+      // Determine the pointed-to type from the AST.
+      mlir::Type loadType = builder.getIntegerType(32); // default
+      if (e->getType()) {
+        loadType = convertType(e->getType());
+        if (!loadType || loadType.isa<mlir::NoneType>())
+          loadType = builder.getIntegerType(32);
+      }
+      return builder.create<mlir::LLVM::LoadOp>(location, loadType, operand);
+    }
+    return operand;
+  }
   }
   return {};
 }
@@ -959,6 +971,35 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         location, i32Ty, static_cast<int64_t>(4)); // DECISION: default 4 bytes
     return builder.create<mlir::LLVM::CallOp>(location, vecNewFn,
                                                mlir::ValueRange{elemSize}).getResult();
+  }
+
+  // Box::new(value) — heap allocation.
+  if (calleeName == "Box_new" || calleeName == "Box::new") {
+    if (!args.empty()) {
+      auto ptrType = getPtrType();
+      auto i64Type = builder.getIntegerType(64);
+      // Determine value size.
+      mlir::Type valType = args[0].getType();
+      uint64_t size = getTypeSize(valType);
+      if (size == 0) size = 8;
+      auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+          location, i64Type, static_cast<int64_t>(size));
+      // Call malloc.
+      auto mallocFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
+      if (!mallocFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
+        mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+            location, "malloc", fnType);
+      }
+      auto heapPtr = builder.create<mlir::LLVM::CallOp>(
+          location, mallocFn, mlir::ValueRange{sizeConst}).getResult();
+      // Store value into heap memory.
+      builder.create<mlir::LLVM::StoreOp>(location, args[0], heapPtr);
+      return heapPtr;
+    }
+    return {};
   }
 
   // Look up function in module.
