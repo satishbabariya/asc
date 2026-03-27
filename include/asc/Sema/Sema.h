@@ -38,6 +38,8 @@ struct Symbol {
   Decl *decl = nullptr;
   Type *type = nullptr;
   bool isMutable = false;
+  bool isMoved = false;               // Track use-after-move
+  SourceLocation movedAt;              // Where it was moved
   OwnershipInfo ownership;
 };
 

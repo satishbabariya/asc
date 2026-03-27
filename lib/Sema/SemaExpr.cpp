@@ -225,6 +225,12 @@ Type *Sema::checkDeclRefExpr(DeclRefExpr *e) {
                     "undeclared identifier '" + e->getName().str() + "'");
     return nullptr;
   }
+  // Use-after-move detection: check if the value has been moved.
+  if (sym->isMoved) {
+    diags.emitError(e->getLocation(), DiagID::ErrUseAfterMove,
+                    "use of moved value '" + e->getName().str() + "'");
+    return sym->type;
+  }
   e->setResolvedDecl(sym->decl);
   // Propagate ownership from the variable's symbol.
   if (sym->ownership.kind != OwnershipKind::Unknown)
@@ -297,6 +303,29 @@ Type *Sema::checkCallExpr(CallExpr *e) {
   // Run ownership inference on arguments.
   if (fnDecl) {
     inferCallOwnership(e, fnDecl);
+
+    // Mark non-copy arguments as moved when passed by value (owned).
+    auto &params = fnDecl->getParams();
+    auto &args = e->getArgs();
+    for (unsigned i = 0; i < args.size() && i < params.size(); ++i) {
+      Type *paramType = params[i].type;
+      // Skip ref/refmut params — they borrow, not move.
+      if (paramType && (dynamic_cast<RefType *>(paramType) ||
+                        dynamic_cast<RefMutType *>(paramType)))
+        continue;
+      // If the argument is a DeclRefExpr to a non-copy variable, mark as moved.
+      if (auto *argRef = dynamic_cast<DeclRefExpr *>(args[i])) {
+        Type *argType = argRef->getType();
+        if (argType && !isCopyType(argType)) {
+          Symbol *argSym = currentScope->lookup(argRef->getName());
+          if (argSym && !argSym->isMoved) {
+            argSym->isMoved = true;
+            argSym->movedAt = e->getLocation();
+          }
+        }
+      }
+    }
+
     Type *retType = fnDecl->getReturnType();
     // Return value ownership: if own<T>, mark as Owned; else Copied.
     if (retType && dynamic_cast<OwnType *>(retType))

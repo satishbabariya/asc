@@ -2050,11 +2050,22 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
     }
   }
 
+  // Determine the result type for match-as-expression.
+  // Use the AST type set by Sema, or infer from the first arm body.
+  mlir::Type matchResultType;
+  if (e->getType())
+    matchResultType = convertType(e->getType());
+
   // Build match as a chain of cf.cond_br arms.
   auto *currentBlock = builder.getBlock();
   auto *parentRegion = currentBlock->getParent();
   auto *mergeBlock = new mlir::Block();
   auto i32Ty = builder.getIntegerType(32);
+
+  // If we have a result type, add a block argument to mergeBlock.
+  if (matchResultType && !matchResultType.isa<mlir::NoneType>() &&
+      matchResultType.isIntOrIndexOrFloat())
+    mergeBlock->addArgument(matchResultType, location);
 
   // Create blocks: one per arm + merge.
   llvm::SmallVector<mlir::Block *, 8> armBlocks;
@@ -2185,12 +2196,31 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
         }
       }
 
-      visitExpr(arm.body);
+      mlir::Value armResult = visitExpr(arm.body);
       popScope();
       auto *curBlock = builder.getBlock();
       if (curBlock->empty() ||
-          !curBlock->back().hasTrait<mlir::OpTrait::IsTerminator>())
-        builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+          !curBlock->back().hasTrait<mlir::OpTrait::IsTerminator>()) {
+        if (mergeBlock->getNumArguments() > 0 && armResult) {
+          // Coerce result type if needed.
+          if (armResult.getType() != mergeBlock->getArgument(0).getType() &&
+              armResult.getType().isIntOrIndexOrFloat() &&
+              mergeBlock->getArgument(0).getType().isIntOrIndexOrFloat()) {
+            unsigned srcW = armResult.getType().getIntOrFloatBitWidth();
+            unsigned dstW = mergeBlock->getArgument(0).getType().getIntOrFloatBitWidth();
+            if (srcW < dstW)
+              armResult = builder.create<mlir::arith::ExtSIOp>(
+                  location, mergeBlock->getArgument(0).getType(), armResult);
+            else if (srcW > dstW)
+              armResult = builder.create<mlir::arith::TruncIOp>(
+                  location, mergeBlock->getArgument(0).getType(), armResult);
+          }
+          builder.create<mlir::cf::BranchOp>(location, mergeBlock,
+                                              mlir::ValueRange{armResult});
+        } else {
+          builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+        }
+      }
 
       // Set insertion point for next check block.
       if (!isLast && i < checkBlocks.size())
@@ -2208,12 +2238,30 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
       auto *ip = static_cast<IdentPattern *>(arm.pattern);
       declare(ip->getName(), scrutinee);
     }
-    visitExpr(arm.body);
+    mlir::Value armResult2 = visitExpr(arm.body);
     popScope();
     auto *curBlock2 = builder.getBlock();
     if (curBlock2->empty() ||
-        !curBlock2->back().hasTrait<mlir::OpTrait::IsTerminator>())
-      builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+        !curBlock2->back().hasTrait<mlir::OpTrait::IsTerminator>()) {
+      if (mergeBlock->getNumArguments() > 0 && armResult2) {
+        if (armResult2.getType() != mergeBlock->getArgument(0).getType() &&
+            armResult2.getType().isIntOrIndexOrFloat() &&
+            mergeBlock->getArgument(0).getType().isIntOrIndexOrFloat()) {
+          unsigned srcW = armResult2.getType().getIntOrFloatBitWidth();
+          unsigned dstW = mergeBlock->getArgument(0).getType().getIntOrFloatBitWidth();
+          if (srcW < dstW)
+            armResult2 = builder.create<mlir::arith::ExtSIOp>(
+                location, mergeBlock->getArgument(0).getType(), armResult2);
+          else if (srcW > dstW)
+            armResult2 = builder.create<mlir::arith::TruncIOp>(
+                location, mergeBlock->getArgument(0).getType(), armResult2);
+        }
+        builder.create<mlir::cf::BranchOp>(location, mergeBlock,
+                                            mlir::ValueRange{armResult2});
+      } else {
+        builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+      }
+    }
 
     // Set insertion point for next check block.
     if (!isLast && i < checkBlocks.size())
@@ -2225,27 +2273,20 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
     mergeBlock->erase();
     if (currentFunction && !currentFunction.getBody().empty())
       builder.setInsertionPointToEnd(&currentFunction.getBody().back());
-  } else {
-    builder.setInsertionPointToStart(mergeBlock);
-    // If all arms have terminators (returns), the merge block is unreachable
-    // from arm bodies but may be reached from the last check's "else" branch.
-    // Add unreachable to handle this exhaustive-match fallthrough.
-    if (currentFunction &&
-        currentFunction.getFunctionType().getNumResults() > 0) {
-      // Emit a dummy 0 return for the unreachable merge path.
-      mlir::Type retType = currentFunction.getFunctionType().getResult(0);
-      if (retType.isIntOrIndexOrFloat()) {
-        auto zero = builder.create<mlir::arith::ConstantIntOp>(
-            location, 0, retType);
-        builder.create<mlir::func::ReturnOp>(location,
-                                              mlir::ValueRange{zero});
-      } else {
-        builder.create<mlir::func::ReturnOp>(location);
-      }
-    } else {
-      builder.create<mlir::func::ReturnOp>(location);
-    }
+    return {};
   }
+
+  builder.setInsertionPointToStart(mergeBlock);
+
+  // If merge block has arguments, this is a match-as-expression.
+  // Return the block argument as the match result.
+  if (mergeBlock->getNumArguments() > 0) {
+    return mergeBlock->getArgument(0);
+  }
+
+  // No result — match is used as a statement.
+  // The merge block is reached from the last check's fallthrough.
+  // Only add a dummy return if we're at function-end and need a terminator.
   return {};
 }
 
