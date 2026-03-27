@@ -56,6 +56,21 @@ bool Sema::isCompatible(Type *lhs, Type *rhs) {
     }
   }
 
+  // Ownership wrapper compatibility: own<T> is compatible with T.
+  if (auto *lo = dynamic_cast<OwnType *>(lhs))
+    return isCompatible(lo->getInner(), rhs);
+  if (auto *ro = dynamic_cast<OwnType *>(rhs))
+    return isCompatible(lhs, ro->getInner());
+  // ref<T> and refmut<T> are compatible with T for parameter passing.
+  if (auto *lr = dynamic_cast<RefType *>(lhs))
+    return isCompatible(lr->getInner(), rhs);
+  if (auto *rr = dynamic_cast<RefType *>(rhs))
+    return isCompatible(lhs, rr->getInner());
+  if (auto *lrm = dynamic_cast<RefMutType *>(lhs))
+    return isCompatible(lrm->getInner(), rhs);
+  if (auto *rrm = dynamic_cast<RefMutType *>(rhs))
+    return isCompatible(lhs, rrm->getInner());
+
   // Same kind check.
   if (lhs->getKind() != rhs->getKind())
     return false;

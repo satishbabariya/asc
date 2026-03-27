@@ -964,6 +964,16 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
   // Look up function in module.
   auto callee = module.lookupSymbol<mlir::func::FuncOp>(calleeName);
   if (callee) {
+    // Coerce argument types: if function expects struct by value but we have
+    // a pointer (from struct literal alloca), load the struct from the pointer.
+    auto funcArgTypes = callee.getArgumentTypes();
+    for (unsigned i = 0; i < args.size() && i < funcArgTypes.size(); ++i) {
+      if (mlir::isa<mlir::LLVM::LLVMPointerType>(args[i].getType()) &&
+          mlir::isa<mlir::LLVM::LLVMStructType>(funcArgTypes[i])) {
+        args[i] = builder.create<mlir::LLVM::LoadOp>(
+            location, funcArgTypes[i], args[i]);
+      }
+    }
     auto callOp = builder.create<mlir::func::CallOp>(location, callee, args);
     return callOp.getNumResults() > 0 ? callOp.getResult(0) : mlir::Value{};
   }
