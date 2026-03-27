@@ -42,15 +42,18 @@ std::vector<ParamDecl> Parser::parseParamList() {
     ParamDecl param;
     param.loc = tok.getLocation();
 
-    // Self parameters: ref<Self>, refmut<Self>, own<Self>
+    // Self parameters: ref<Self>, ref<Type>, refmut<Self>, refmut<Type>, own<Self>
     if (tok.is(tok::kw_ref) && lexer.peek().is(tok::less)) {
       advance(); // ref
       advance(); // <
-      if (tok.is(tok::kw_Self)) {
-        advance();
+      if (tok.is(tok::kw_Self) || tok.is(tok::identifier)) {
+        advance(); // Self or TypeName
         expect(tok::greater);
+        // Check if next token is comma or ')' — this is an unnamed self param.
+        // If next is ',' or ')' treat as self; otherwise it might be name: ref<T>.
         param.name = "self";
         param.isSelfRef = true;
+        param.type = nullptr; // Type resolved during sema
         params.push_back(std::move(param));
         if (!consume(tok::comma))
           break;
@@ -60,11 +63,12 @@ std::vector<ParamDecl> Parser::parseParamList() {
     if (tok.is(tok::kw_refmut) && lexer.peek().is(tok::less)) {
       advance(); // refmut
       advance(); // <
-      if (tok.is(tok::kw_Self)) {
-        advance();
+      if (tok.is(tok::kw_Self) || tok.is(tok::identifier)) {
+        advance(); // Self or TypeName
         expect(tok::greater);
         param.name = "self";
         param.isSelfRefMut = true;
+        param.type = nullptr;
         params.push_back(std::move(param));
         if (!consume(tok::comma))
           break;
