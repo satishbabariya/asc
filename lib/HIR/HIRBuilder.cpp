@@ -983,6 +983,16 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
   if (!calleeName.empty()) {
     mlir::Value calleeVal = lookup(calleeName);
     if (calleeVal && mlir::isa<mlir::LLVM::LLVMPointerType>(calleeVal.getType())) {
+      // If this is an alloca-backed variable, load the function pointer.
+      auto *defOp = calleeVal.getDefiningOp();
+      if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
+        auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
+        mlir::Type elemType = allocaOp.getElemType();
+        if (elemType && mlir::isa<mlir::LLVM::LLVMPointerType>(elemType)) {
+          calleeVal = builder.create<mlir::LLVM::LoadOp>(
+              location, elemType, calleeVal);
+        }
+      }
       // Indirect call through function pointer.
       // Determine return type from Sema.
       mlir::Type retType = builder.getIntegerType(32); // default
