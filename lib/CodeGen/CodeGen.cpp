@@ -7,6 +7,7 @@
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/All.h"
 #include "mlir/Target/LLVMIR/Export.h"
@@ -95,6 +96,9 @@ bool CodeGenerator::runMLIRLowering(mlir::ModuleOp module) {
   // Custom lowering passes.
   pm.addPass(createOwnershipLoweringPass());
   pm.addPass(createConcurrencyLoweringPass(llvm::Triple(opts.targetTriple)));
+
+  // Canonicalization: constant folding, dead code elimination.
+  pm.addPass(mlir::createCanonicalizerPass());
 
   // Standard MLIR-to-LLVM lowering.
   pm.addPass(mlir::createConvertSCFToCFPass());

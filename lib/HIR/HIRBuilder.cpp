@@ -190,6 +190,28 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
   if (auto *nt = dynamic_cast<NamedType *>(astType)) {
     llvm::StringRef name = nt->getName();
 
+    // If the type has generic args, resolve to monomorphized name.
+    if (!nt->getGenericArgs().empty()) {
+      std::string mangled = name.str();
+      for (auto *ga : nt->getGenericArgs()) {
+        mangled += "_";
+        if (auto *bt = dynamic_cast<BuiltinType *>(ga)) {
+          switch (bt->getBuiltinKind()) {
+          case BuiltinTypeKind::I32: mangled += "i32"; break;
+          case BuiltinTypeKind::I64: mangled += "i64"; break;
+          case BuiltinTypeKind::F32: mangled += "f32"; break;
+          case BuiltinTypeKind::F64: mangled += "f64"; break;
+          default: mangled += "type"; break;
+          }
+        } else if (auto *inner_nt = dynamic_cast<NamedType *>(ga)) {
+          mangled += inner_nt->getName().str();
+        }
+      }
+      auto sit = sema.structDecls.find(mangled);
+      if (sit != sema.structDecls.end())
+        return convertStructType(sit->second);
+    }
+
     // Check for struct.
     auto sit = sema.structDecls.find(name);
     if (sit != sema.structDecls.end())

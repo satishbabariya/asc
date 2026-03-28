@@ -21,7 +21,7 @@ void Sema::checkFunctionDecl(FunctionDecl *d) {
     for (const auto &param : d->getParams()) {
       Symbol psym;
       psym.name = param.name;
-      psym.type = param.type;
+      psym.type = resolveType(param.type);
       psym.ownership.kind = inferParamOwnership(param.type);
       psym.ownership.isCopy = param.type ? isCopyType(param.type) : false;
       psym.ownership.isSend = param.type ? isSendType(param.type) : false;

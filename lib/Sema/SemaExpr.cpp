@@ -641,6 +641,45 @@ Type *Sema::checkCastExpr(CastExpr *e) {
 
 Type *Sema::checkStructLiteral(StructLiteral *e) {
   auto it = structDecls.find(e->getTypeName());
+
+  // If not found, try to trigger monomorphization from mangled name.
+  // e.g., "Pair_i32_i32" → monomorphize Pair with [i32, i32].
+  if (it == structDecls.end()) {
+    llvm::StringRef mangledName = e->getTypeName();
+    auto underscorePos = mangledName.find('_');
+    if (underscorePos != llvm::StringRef::npos) {
+      std::string baseName = mangledName.substr(0, underscorePos).str();
+      auto baseIt = structDecls.find(baseName);
+      if (baseIt != structDecls.end() && !baseIt->second->getGenericParams().empty()) {
+        // Parse type args from mangled suffix.
+        llvm::StringRef suffix = mangledName.substr(underscorePos + 1);
+        std::vector<Type *> typeArgs;
+        while (!suffix.empty()) {
+          llvm::StringRef part;
+          std::tie(part, suffix) = suffix.split('_');
+          // Resolve part to a builtin type.
+          auto btk = llvm::StringSwitch<int>(part)
+            .Case("i8", (int)BuiltinTypeKind::I8)
+            .Case("i16", (int)BuiltinTypeKind::I16)
+            .Case("i32", (int)BuiltinTypeKind::I32)
+            .Case("i64", (int)BuiltinTypeKind::I64)
+            .Case("f32", (int)BuiltinTypeKind::F32)
+            .Case("f64", (int)BuiltinTypeKind::F64)
+            .Case("bool", (int)BuiltinTypeKind::Bool)
+            .Default(-1);
+          if (btk >= 0) {
+            typeArgs.push_back(ctx.getBuiltinType(
+                static_cast<BuiltinTypeKind>(btk)));
+          }
+        }
+        if (!typeArgs.empty()) {
+          monomorphizeType(baseName, typeArgs);
+          it = structDecls.find(e->getTypeName());
+        }
+      }
+    }
+  }
+
   if (it != structDecls.end()) {
     StructDecl *sd = it->second;
     // Check field types.

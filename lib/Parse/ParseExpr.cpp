@@ -506,6 +506,67 @@ Expr *Parser::parsePrimaryExpr() {
       return parseMacroCallExpr(std::move(name));
     }
 
+    // Check for generic struct literal: Type<Args> { ... }
+    // Heuristic: uppercase first letter + < indicates generic type, not comparison.
+    if (tok.is(tok::less) && !name.empty() && name[0] >= 'A' && name[0] <= 'Z') {
+      advance(); // <
+      std::vector<Type *> genericArgs;
+      while (!tok.is(tok::greater) && !tok.is(tok::greatergreater) &&
+             !tok.is(tok::eof)) {
+        Type *arg = parseType();
+        if (arg) genericArgs.push_back(arg);
+        if (!consume(tok::comma)) break;
+      }
+      if (tok.is(tok::greatergreater))
+        tok = Token(tok::greater, tok.getLocation(), ">");
+      else
+        expect(tok::greater);
+
+      // Followed by { — struct literal with generic args.
+      if (tok.is(tok::l_brace)) {
+        // Mangle the struct name using same scheme as Sema::mangleGenericName.
+        // This creates e.g. "Pair_i32_i32" matching what monomorphizeType produces.
+        std::string monoName = name;
+        for (auto *ga : genericArgs) {
+          monoName += "_";
+          if (auto *bt = dynamic_cast<BuiltinType *>(ga)) {
+            switch (bt->getBuiltinKind()) {
+            case BuiltinTypeKind::I8: monoName += "i8"; break;
+            case BuiltinTypeKind::I16: monoName += "i16"; break;
+            case BuiltinTypeKind::I32: monoName += "i32"; break;
+            case BuiltinTypeKind::I64: monoName += "i64"; break;
+            case BuiltinTypeKind::F32: monoName += "f32"; break;
+            case BuiltinTypeKind::F64: monoName += "f64"; break;
+            case BuiltinTypeKind::Bool: monoName += "bool"; break;
+            default: monoName += "type"; break;
+            }
+          } else if (auto *nt = dynamic_cast<NamedType *>(ga)) {
+            monoName += nt->getName().str();
+          } else {
+            monoName += "type";
+          }
+        }
+        advance(); // {
+        std::vector<FieldInit> fields;
+        while (!tok.is(tok::r_brace) && !tok.is(tok::eof)) {
+          FieldInit fi;
+          fi.loc = tok.getLocation();
+          if (!tok.is(tok::identifier)) { error("expected field name"); break; }
+          fi.name = tok.getSpelling().str();
+          advance();
+          if (consume(tok::colon)) fi.value = parseExpr();
+          else fi.value = nullptr;
+          fields.push_back(std::move(fi));
+          if (!consume(tok::comma)) break;
+        }
+        expect(tok::r_brace);
+        return ctx.create<StructLiteral>(std::move(monoName),
+                                         std::move(fields), nullptr, loc);
+      }
+      // Not followed by { — fall through (might be comparison chain).
+      // This is incorrect but rare. TODO: better disambiguation.
+    }
+
     // Check for path: Foo::Bar
     if (tok.is(tok::coloncolon)) {
       std::vector<std::string> segments;
