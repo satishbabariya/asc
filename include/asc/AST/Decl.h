@@ -96,6 +96,7 @@ public:
     return genericParams;
   }
   const std::vector<ParamDecl> &getParams() const { return params; }
+  std::vector<ParamDecl> &getMutableParams() { return params; }
   Type *getReturnType() const { return returnType; }
   CompoundStmt *getBody() const { return body; }
   const std::vector<WhereConstraint> &getWhereClause() const {

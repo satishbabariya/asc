@@ -144,8 +144,23 @@ void Sema::checkImplDecl(ImplDecl *d) {
   }
 
   pushScope();
-  for (auto *method : d->getMethods())
+  for (auto *method : d->getMethods()) {
+    // Set the self parameter type to the impl's target type.
+    for (auto &param : method->getMutableParams()) {
+      if ((param.isSelfRef || param.isSelfRefMut || param.isSelfOwn) &&
+          !param.type) {
+        if (param.isSelfRef)
+          param.type = ctx.create<RefType>(d->getTargetType(),
+                                            method->getLocation());
+        else if (param.isSelfRefMut)
+          param.type = ctx.create<RefMutType>(d->getTargetType(),
+                                               method->getLocation());
+        else
+          param.type = d->getTargetType();
+      }
+    }
     checkFunctionDecl(method);
+  }
   popScope();
 }
 

@@ -325,7 +325,13 @@ mlir::Value HIRBuilder::visitFunctionDecl(FunctionDecl *d) {
   // Build function type.
   llvm::SmallVector<mlir::Type> paramTypes;
   for (const auto &param : d->getParams()) {
-    paramTypes.push_back(convertType(param.type));
+    if ((param.isSelfRef || param.isSelfRefMut || param.isSelfOwn) &&
+        !param.type) {
+      // Self parameter: use pointer type (pointer to the struct).
+      paramTypes.push_back(getPtrType());
+    } else {
+      paramTypes.push_back(convertType(param.type));
+    }
   }
   mlir::Type retType = convertType(d->getReturnType());
   auto funcType = builder.getFunctionType(paramTypes,
