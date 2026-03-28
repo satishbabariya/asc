@@ -197,6 +197,30 @@ void Sema::checkVarDecl(VarDecl *d) {
                       d->getName().str() + "'");
     }
   }
+
+  // Handle destructuring patterns: const [a, b] = expr
+  if (d->getName().empty() && d->getPattern()) {
+    auto declarePatternBindings = [&](Pattern *pat) {
+      if (auto *ip = dynamic_cast<IdentPattern *>(pat)) {
+        Symbol sym;
+        sym.name = ip->getName().str();
+        sym.decl = d;
+        sym.type = type;
+        sym.isMutable = !d->isConst();
+        sym.ownership = ownerInfo;
+        currentScope->declare(ip->getName(), std::move(sym));
+      }
+    };
+    if (auto *sp = dynamic_cast<SlicePattern *>(d->getPattern())) {
+      for (auto *elem : sp->getElements())
+        declarePatternBindings(elem);
+    } else if (auto *tp = dynamic_cast<TuplePattern *>(d->getPattern())) {
+      for (auto *elem : tp->getElements())
+        declarePatternBindings(elem);
+    } else {
+      declarePatternBindings(d->getPattern());
+    }
+  }
 }
 
 } // namespace asc

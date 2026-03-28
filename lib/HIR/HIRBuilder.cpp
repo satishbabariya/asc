@@ -383,6 +383,27 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
   if (d->getInit())
     init = visitExpr(d->getInit());
 
+  // Handle destructuring patterns: const [a, b] = expr
+  if (init && d->getPattern() && d->getName().empty()) {
+    // For tuple/slice destructuring, bind each element.
+    // For now, all elements get the same value (the channel pointer).
+    // A proper implementation would extract tuple fields.
+    if (auto *sp = dynamic_cast<SlicePattern *>(d->getPattern())) {
+      for (auto *elem : sp->getElements()) {
+        if (auto *ip = dynamic_cast<IdentPattern *>(elem)) {
+          declare(ip->getName(), init);
+        }
+      }
+    } else if (auto *tp = dynamic_cast<TuplePattern *>(d->getPattern())) {
+      for (auto *elem : tp->getElements()) {
+        if (auto *ip = dynamic_cast<IdentPattern *>(elem)) {
+          declare(ip->getName(), init);
+        }
+      }
+    }
+    return init;
+  }
+
   if (init && !d->getName().empty()) {
     // Mutable variables (let): allocate on stack so loop bodies can
     // store updated values. LLVM mem2reg will promote to SSA later.
@@ -1863,6 +1884,26 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return result.getResult();
   }
 
+  // Channel methods: .send(value) and .recv() — single-threaded stubs.
+  if (methodName == "send" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    // Store value to channel buffer (simplified: just store at channel ptr).
+    if (args.size() > 1) {
+      builder.create<mlir::LLVM::StoreOp>(location, args[1], receiver);
+    }
+    return {};
+  }
+  if (methodName == "recv" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    // Load value from channel buffer (simplified).
+    auto i32Type = builder.getIntegerType(32);
+    return builder.create<mlir::LLVM::LoadOp>(location, i32Type, receiver);
+  }
+  if (methodName == "join" && receiver) {
+    // No-op for single-threaded mode.
+    return {};
+  }
+
   // Try looking up as mangled name: TypeName_method or just method.
   std::string mangledName = receiverTypeName + "_" + methodName;
   auto callee = module.lookupSymbol<mlir::func::FuncOp>(mangledName);
@@ -2924,6 +2965,51 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
   }
 
   // Unknown macro: evaluate args.
+  // Channel creation: chan_make(capacity) → malloc for channel struct.
+  if (name == "chan_make") {
+    auto ptrType = getPtrType();
+    auto i64Type = builder.getIntegerType(64);
+    // Allocate a channel struct: { buffer_ptr, capacity, head, tail, len }
+    // For simplicity, allocate a fixed-size buffer.
+    auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+        location, i64Type, static_cast<int64_t>(256));
+    auto mallocFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
+    if (!mallocFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
+      mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "malloc", fnType);
+    }
+    auto chanPtr = builder.create<mlir::LLVM::CallOp>(
+        location, mallocFn, mlir::ValueRange{sizeConst}).getResult();
+    return chanPtr;
+  }
+
+  // Task spawn: task_spawn(closure) → call pthread_create or wasi_thread_start.
+  // For now, just call the closure directly (single-threaded emulation).
+  if (name == "task_spawn") {
+    if (!e->getArgs().empty()) {
+      mlir::Value closure = visitExpr(e->getArgs()[0]);
+      // Call the closure directly for single-threaded mode.
+      if (closure && mlir::isa<mlir::LLVM::LLVMPointerType>(closure.getType())) {
+        auto i32Type = builder.getIntegerType(32);
+        mlir::OperationState callState(location, "llvm.call");
+        callState.addOperands(closure);
+        callState.addTypes({});
+        builder.create(callState);
+      }
+    }
+    // Return a handle (null pointer for single-threaded).
+    auto ptrType = getPtrType();
+    return builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+  }
+
+  // Task join: task_join(handle) → no-op for single-threaded.
+  if (name == "task_join") {
+    return {};
+  }
+
+  // Fallback: visit arguments and return {}.
   for (auto *arg : e->getArgs())
     visitExpr(arg);
   return {};

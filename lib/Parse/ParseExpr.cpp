@@ -440,6 +440,42 @@ Expr *Parser::parsePrimaryExpr() {
   if (tok.is(tok::kw_for))
     return parseForExpr();
 
+  // Channel creation: chan<T>(capacity)
+  if (tok.is(tok::kw_chan)) {
+    advance();
+    // Parse generic arg: <T>
+    Type *elemType = nullptr;
+    if (consume(tok::less)) {
+      elemType = parseType();
+      expect(tok::greater);
+    }
+    // Parse capacity: (N)
+    expect(tok::l_paren);
+    Expr *capacity = parseExpr();
+    expect(tok::r_paren);
+    // Emit as a call to chan_make(capacity) — macro-like.
+    std::vector<Expr *> args;
+    if (capacity) args.push_back(capacity);
+    return ctx.create<MacroCallExpr>("chan_make", std::move(args), loc);
+  }
+
+  // task.spawn(closure) — parse as method call on 'task' namespace.
+  if (tok.is(tok::kw_task) && lexer.peek().is(tok::dot)) {
+    advance(); // task
+    advance(); // .
+    std::string methodName;
+    if (tok.is(tok::identifier)) {
+      methodName = tok.getSpelling().str();
+      advance();
+    }
+    expect(tok::l_paren);
+    auto spawnArgs = parseArgList();
+    expect(tok::r_paren);
+    // Emit as a macro call: task_spawn(args) or task_join(args)
+    return ctx.create<MacroCallExpr>("task_" + methodName,
+                                      std::move(spawnArgs), loc);
+  }
+
   // Unsafe block.
   if (tok.is(tok::kw_unsafe)) {
     advance();
