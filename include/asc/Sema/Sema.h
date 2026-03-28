@@ -53,6 +53,12 @@ public:
   Symbol *lookupLocal(llvm::StringRef name);
   Scope *getParent() const { return parent; }
 
+  /// Iterate all symbols in this scope (for move state snapshots).
+  void forEachSymbol(llvm::function_ref<void(llvm::StringRef, Symbol &)> fn) {
+    for (auto &kv : symbols)
+      fn(kv.first(), kv.second);
+  }
+
 private:
   Scope *parent;
   llvm::StringMap<Symbol> symbols;

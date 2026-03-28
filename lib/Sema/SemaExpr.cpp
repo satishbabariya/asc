@@ -858,16 +858,67 @@ Type *Sema::checkIfExpr(IfExpr *e) {
                     "if condition must be bool");
   }
 
-  // checkCompoundStmt manages its own scope and checks the trailing expression.
-  // Do NOT re-check the trailing expression here — that would evaluate it
-  // after the compound scope is popped, causing in-block variables to be
-  // invisible.
+  // Snapshot moved state before branches for E005 detection.
+  llvm::StringMap<bool> moveStateBefore;
+  for (Scope *s = currentScope; s; s = s->getParent()) {
+    s->forEachSymbol([&](llvm::StringRef name, Symbol &sym) {
+      if (!moveStateBefore.count(name))
+        moveStateBefore[name] = sym.isMoved;
+    });
+  }
+
   if (e->getThenBlock()) {
     checkCompoundStmt(e->getThenBlock());
   }
 
+  // Capture post-then move state.
+  llvm::StringMap<bool> moveStateAfterThen;
+  for (Scope *s = currentScope; s; s = s->getParent()) {
+    s->forEachSymbol([&](llvm::StringRef name, Symbol &sym) {
+      if (!moveStateAfterThen.count(name))
+        moveStateAfterThen[name] = sym.isMoved;
+    });
+  }
+
   if (e->getElseBlock()) {
+    // Restore pre-branch move state for the else branch.
+    for (Scope *s = currentScope; s; s = s->getParent()) {
+      s->forEachSymbol([&](llvm::StringRef name, Symbol &sym) {
+        auto it = moveStateBefore.find(name);
+        if (it != moveStateBefore.end())
+          sym.isMoved = it->second;
+      });
+    }
     checkStmt(e->getElseBlock());
+  }
+
+  // E005: Check for conditional moves — moved in one branch but not the other.
+  if (e->getElseBlock()) {
+    for (auto &[name, movedAfterThen] : moveStateAfterThen) {
+      auto beforeIt = moveStateBefore.find(name);
+      if (beforeIt == moveStateBefore.end() || beforeIt->second)
+        continue; // already moved before, or not tracked
+      Symbol *sym = currentScope->lookup(name);
+      if (!sym) continue;
+      bool movedAfterElse = sym->isMoved;
+      if (movedAfterThen != movedAfterElse) {
+        diags.emitWarning(e->getLocation(), DiagID::ErrMoveInConditionalBranch,
+                        "value '" + name.str() +
+                        "' is moved in one branch of conditional but not the other");
+        // Mark as moved on all paths to prevent false use-after-move.
+        sym->isMoved = true;
+      }
+    }
+  } else {
+    // No else: if then-branch moves something, mark as maybe-moved.
+    for (auto &[name, movedAfterThen] : moveStateAfterThen) {
+      auto beforeIt = moveStateBefore.find(name);
+      if (beforeIt == moveStateBefore.end() || beforeIt->second) continue;
+      if (movedAfterThen && !beforeIt->second) {
+        Symbol *sym = currentScope->lookup(name);
+        if (sym) sym->isMoved = true; // conservatively mark as moved
+      }
+    }
   }
 
   return ctx.getVoidType();
