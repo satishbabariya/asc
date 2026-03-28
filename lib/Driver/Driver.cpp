@@ -224,6 +224,7 @@ ExitCode Driver::runFmt() {
   unsigned indent = 0;
   bool needNewline = false;
   bool lastWasNewline = true;
+  bool lastWasOpen = false; // after ( or [
 
   while (true) {
     Token tok = lexer.lex();
@@ -258,20 +259,22 @@ ExitCode Driver::runFmt() {
     }
 
     // Indent at start of line.
+    bool atLineStart = lastWasNewline;
     if (lastWasNewline) {
       for (unsigned i = 0; i < indent; ++i) out << "  ";
       lastWasNewline = false;
     }
 
-    // Emit the token.
-    // Add space before most tokens (except punctuation after identifiers).
-    if (!lastWasNewline && !tok.isOneOf(tok::comma, tok::semicolon,
-            tok::colon, tok::dot, tok::r_paren, tok::r_bracket,
-            tok::l_paren, tok::l_bracket)) {
+    // Emit the token with smart spacing.
+    // No space: after ( [, before ) ] , ; : . (, at line start.
+    if (!atLineStart && !lastWasOpen &&
+        !tok.isOneOf(tok::comma, tok::semicolon, tok::colon, tok::dot,
+                     tok::r_paren, tok::r_bracket, tok::l_paren, tok::l_bracket)) {
       out << " ";
     }
 
     out << tok.getSpelling();
+    lastWasOpen = tok.isOneOf(tok::l_paren, tok::l_bracket);
 
     // Handle opening braces — indent after.
     if (tok.is(tok::l_brace)) {
