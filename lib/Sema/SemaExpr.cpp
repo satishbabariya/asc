@@ -423,6 +423,13 @@ Type *Sema::checkMethodCallExpr(MethodCallExpr *e) {
     }
   }
 
+  // Built-in methods: clone() returns the receiver type.
+  if (e->getMethodName() == "clone")
+    return baseType;
+  // len() returns i32 for strings/vecs.
+  if (e->getMethodName() == "len")
+    return ctx.getBuiltinType(BuiltinTypeKind::I32);
+
   // Receiver borrow: method call on ref borrows, on refmut borrows mut.
   markExprOwnership(e->getReceiver(), OwnershipKind::Borrowed);
   return nullptr;

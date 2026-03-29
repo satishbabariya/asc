@@ -763,6 +763,47 @@ mlir::Value HIRBuilder::visitBinaryExpr(BinaryExpr *e) {
     }
   }
 
+  // Struct comparison: == and != on pointer types via memcmp.
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(lhs.getType()) &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(rhs.getType()) &&
+      !lhsIsString && !rhsIsString &&
+      (e->getOp() == BinaryOp::Eq || e->getOp() == BinaryOp::Ne)) {
+    // Determine struct size from AST type.
+    uint64_t size = 0;
+    asc::Type *lhsAst = e->getLHS()->getType();
+    if (lhsAst) {
+      if (auto *nt = dynamic_cast<NamedType *>(lhsAst)) {
+        auto sit = sema.structDecls.find(nt->getName());
+        if (sit != sema.structDecls.end())
+          size = getTypeSize(convertStructType(sit->second));
+      }
+    }
+    if (size > 0) {
+      auto ptrType = getPtrType();
+      auto i32Type = builder.getIntegerType(32);
+      auto i64Type = builder.getIntegerType(64);
+      // Declare memcmp if needed.
+      auto memcmpFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("memcmp");
+      if (!memcmpFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType, i64Type});
+        memcmpFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "memcmp", fnType);
+      }
+      auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+          location, i64Type, static_cast<int64_t>(size));
+      auto cmpResult = builder.create<mlir::LLVM::CallOp>(
+          location, memcmpFn, mlir::ValueRange{lhs, rhs, sizeConst}).getResult();
+      auto zero = builder.create<mlir::arith::ConstantIntOp>(location, 0, i32Type);
+      if (e->getOp() == BinaryOp::Eq)
+        return builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::eq, cmpResult, zero);
+      else
+        return builder.create<mlir::arith::CmpIOp>(
+            location, mlir::arith::CmpIPredicate::ne, cmpResult, zero);
+    }
+  }
+
   bool isFloat = lhs.getType().isa<mlir::FloatType>();
 
   switch (e->getOp()) {
@@ -1651,6 +1692,37 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       inner = ot->getInner();
     if (auto *nt = dynamic_cast<NamedType *>(inner))
       receiverTypeName = nt->getName().str();
+  }
+
+  // Clone: .clone() → copy the value.
+  // For pointer-backed types (structs), allocate new memory and memcpy.
+  // For scalars, just return the value.
+  if (methodName == "clone" && receiver) {
+    if (mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+      // Look up the struct type for the receiver.
+      if (!receiverTypeName.empty()) {
+        auto sit = sema.structDecls.find(receiverTypeName);
+        if (sit != sema.structDecls.end()) {
+          auto structType = convertStructType(sit->second);
+          uint64_t size = getTypeSize(structType);
+          auto ptrType = getPtrType();
+          auto i64Type = builder.getIntegerType(64);
+          auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+              location, i64Type, static_cast<int64_t>(1));
+          // Alloca new struct on stack.
+          auto cloneAlloca = builder.create<mlir::LLVM::AllocaOp>(
+              location, ptrType, structType, i64One);
+          // Copy fields by loading and storing each one.
+          // Simple approach: load entire struct, store into clone.
+          auto loaded = builder.create<mlir::LLVM::LoadOp>(
+              location, structType, receiver);
+          builder.create<mlir::LLVM::StoreOp>(location, loaded, cloneAlloca);
+          return cloneAlloca;
+        }
+      }
+    }
+    // Scalar clone: just return the value.
+    return receiver;
   }
 
   // Option::unwrap() → load tag, check, load payload.
