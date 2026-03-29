@@ -70,6 +70,47 @@ void __asc_panic(const char *msg, unsigned int msg_len,
 #endif
 }
 
+// Print a string (ptr + len) to stdout.
+extern long write(int fd, const void *buf, unsigned long count);
+
+void __asc_print(const char *ptr, unsigned int len) {
+  if (ptr && len > 0)
+    write(1, ptr, len);
+}
+
+void __asc_println(const char *ptr, unsigned int len) {
+  if (ptr && len > 0)
+    write(1, ptr, len);
+  write(1, "\n", 1);
+}
+
+// Print an integer to stdout.
+void __asc_print_i32(int value) {
+  char buf[12];
+  int neg = 0;
+  unsigned int v;
+  if (value < 0) {
+    neg = 1;
+    v = (unsigned int)(-(value + 1)) + 1;
+  } else {
+    v = (unsigned int)value;
+  }
+  int i = 11;
+  buf[i] = '\0';
+  do {
+    buf[--i] = '0' + (v % 10);
+    v /= 10;
+  } while (v > 0);
+  if (neg)
+    buf[--i] = '-';
+  write(1, buf + i, 11 - i);
+}
+
+void __asc_print_i32_ln(int value) {
+  __asc_print_i32(value);
+  write(1, "\n", 1);
+}
+
 // _start entry point for Wasm.
 extern int main(void);
 

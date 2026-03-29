@@ -2951,38 +2951,77 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
 
   if (name == "println" || name == "print" || name == "eprintln" ||
       name == "eprint") {
-    // Emit call to __asc_print or __asc_eprint.
-    bool isErr = name.starts_with("e");
-    std::string rtFn = isErr ? "__asc_eprint" : "__asc_print";
+    bool addNewline = (name == "println" || name == "eprintln");
+    auto ptrType = getPtrType();
+    auto i32Type = builder.getIntegerType(32);
+    auto voidType = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
 
-    // Evaluate args — for now, handle single string literal arg.
     if (!e->getArgs().empty()) {
       mlir::Value arg = visitExpr(e->getArgs()[0]);
-      if (arg && mlir::isa<mlir::LLVM::LLVMPointerType>(arg.getType())) {
-        // arg is a pointer to string data — get length from global.
-        // DECISION: For string literal args, we pass (ptr, len) to __asc_print.
-        // We need to declare the runtime function.
-        auto ptrType = getPtrType();
-        auto i32Type = builder.getIntegerType(32);
-        auto voidType = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+      if (!arg) return {};
 
-        auto printFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(rtFn);
+      // Integer argument: call __asc_print_i32 or __asc_print_i32_ln.
+      if (arg.getType().isIntOrIndex()) {
+        std::string fnName = addNewline ? "__asc_print_i32_ln" : "__asc_print_i32";
+        auto printFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(fnName);
         if (!printFn) {
           mlir::OpBuilder::InsertionGuard guard(builder);
           builder.setInsertionPointToStart(module.getBody());
-          auto fnType = mlir::LLVM::LLVMFunctionType::get(
-              voidType, {ptrType, i32Type});
-          printFn =
-              builder.create<mlir::LLVM::LLVMFuncOp>(location, rtFn, fnType);
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {i32Type});
+          printFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, fnName, fnType);
         }
+        // Widen/truncate to i32 if needed.
+        if (arg.getType().getIntOrFloatBitWidth() != 32) {
+          if (arg.getType().getIntOrFloatBitWidth() < 32)
+            arg = builder.create<mlir::arith::ExtSIOp>(location, i32Type, arg);
+          else
+            arg = builder.create<mlir::arith::TruncIOp>(location, i32Type, arg);
+        }
+        builder.create<mlir::LLVM::CallOp>(location, printFn, mlir::ValueRange{arg});
+        return {};
+      }
 
-        // DECISION: Use a default length. Full implementation would
-        // track string length alongside pointer.
+      // Pointer argument: string — call __asc_println/__asc_print.
+      if (mlir::isa<mlir::LLVM::LLVMPointerType>(arg.getType())) {
+        std::string fnName = addNewline ? "__asc_println" : "__asc_print";
+        auto printFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(fnName);
+        if (!printFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {ptrType, i32Type});
+          printFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, fnName, fnType);
+        }
+        // Get string length from the AST literal if available.
+        int64_t strLen = 0;
+        if (auto *sl = dynamic_cast<StringLiteral *>(e->getArgs()[0])) {
+          llvm::StringRef val = sl->getValue();
+          // Strip surrounding quotes if present.
+          if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+            strLen = val.size() - 2;
+          else
+            strLen = val.size();
+        }
         auto lenConst = builder.create<mlir::LLVM::ConstantOp>(
-            location, i32Type, static_cast<int64_t>(0));
+            location, i32Type, strLen);
         builder.create<mlir::LLVM::CallOp>(
             location, printFn, mlir::ValueRange{arg, lenConst});
+        return {};
       }
+    } else if (addNewline) {
+      // println!() with no args — just print newline.
+      std::string fnName = "__asc_println";
+      auto printFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(fnName);
+      if (!printFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {ptrType, i32Type});
+        printFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, fnName, fnType);
+      }
+      auto null = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+      auto zero = builder.create<mlir::LLVM::ConstantOp>(
+          location, i32Type, static_cast<int64_t>(0));
+      builder.create<mlir::LLVM::CallOp>(
+          location, printFn, mlir::ValueRange{null, zero});
     }
     return {};
   }
