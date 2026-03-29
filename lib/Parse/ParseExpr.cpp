@@ -174,10 +174,10 @@ Expr *Parser::parsePostfixExpr() {
   while (true) {
     SourceLocation loc = tok.getLocation();
 
-    // Field access or method call: expr.name
+    // Field access or method call: expr.name or expr.0 (tuple index)
     if (tok.is(tok::dot)) {
       advance();
-      if (!tok.is(tok::identifier)) {
+      if (!tok.is(tok::identifier) && !tok.is(tok::integer_literal)) {
         error("expected field or method name");
         return expr;
       }

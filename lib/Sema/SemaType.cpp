@@ -23,6 +23,11 @@ Type *Sema::resolveType(Type *t) {
     if (eit != enumDecls.end())
       return t;
 
+    // Check type alias map.
+    auto aliasIt = typeAliases.find(nt->getName());
+    if (aliasIt != typeAliases.end())
+      return resolveType(aliasIt->second);
+
     // Check scope for type aliases.
     Symbol *sym = currentScope->lookup(nt->getName());
     if (sym && sym->decl) {

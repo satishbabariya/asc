@@ -53,6 +53,8 @@ void Sema::analyze(std::vector<Decl *> &items) {
       enumDecls[ed->getName()] = ed;
     else if (auto *td = dynamic_cast<TraitDecl *>(item))
       traitDecls[td->getName()] = td;
+    else if (auto *ta = dynamic_cast<TypeAliasDecl *>(item))
+      typeAliases[ta->getName()] = ta->getAliasedType();
     else if (auto *id = dynamic_cast<ImplDecl *>(item)) {
       if (auto *nt = dynamic_cast<NamedType *>(id->getTargetType()))
         implDecls[nt->getName()].push_back(id);

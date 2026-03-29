@@ -9,7 +9,7 @@ void Sema::checkFunctionDecl(FunctionDecl *d) {
     Symbol sym;
     sym.name = d->getName().str();
     sym.decl = d;
-    sym.type = d->getReturnType();
+    sym.type = resolveType(d->getReturnType());
     currentScope->declare(d->getName(), std::move(sym));
   }
 
@@ -30,7 +30,7 @@ void Sema::checkFunctionDecl(FunctionDecl *d) {
     }
 
     Type *prevReturn = currentReturnType;
-    currentReturnType = d->getReturnType();
+    currentReturnType = resolveType(d->getReturnType());
 
     checkCompoundStmt(d->getBody());
 

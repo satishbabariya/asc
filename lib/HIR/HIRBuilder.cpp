@@ -252,6 +252,11 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
     if (subIt != typeSubstitutions.end())
       return subIt->second;
 
+    // Check type aliases.
+    auto aliasIt = sema.typeAliases.find(name);
+    if (aliasIt != sema.typeAliases.end())
+      return convertType(aliasIt->second);
+
     // Unknown named type: use opaque pointer.
     return getPtrType();
   }
@@ -1585,11 +1590,41 @@ mlir::Value HIRBuilder::visitStructLiteral(StructLiteral *e) {
 }
 
 mlir::Value HIRBuilder::visitTupleLiteral(TupleLiteral *e) {
-  // Emit all elements.
-  mlir::Value last;
-  for (auto *elem : e->getElements())
-    last = visitExpr(elem);
-  return last;
+  auto location = loc(e->getLocation());
+  llvm::SmallVector<mlir::Value> elements;
+  llvm::SmallVector<mlir::Type> elemTypes;
+  for (auto *elem : e->getElements()) {
+    mlir::Value v = visitExpr(elem);
+    if (v) {
+      elements.push_back(v);
+      elemTypes.push_back(v.getType());
+    }
+  }
+  if (elements.empty())
+    return {};
+  if (elements.size() == 1)
+    return elements[0];
+
+  // Create anonymous LLVM struct for the tuple.
+  auto tupleType = mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, elemTypes);
+  auto ptrType = getPtrType();
+  auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+      location, builder.getIntegerType(64), static_cast<int64_t>(1));
+  auto alloca = builder.create<mlir::LLVM::AllocaOp>(
+      location, ptrType, tupleType, i64One);
+
+  // Store each element via GEP.
+  auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+      location, builder.getIntegerType(32), static_cast<int64_t>(0));
+  for (unsigned i = 0; i < elements.size(); ++i) {
+    auto idx = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(32), static_cast<int64_t>(i));
+    auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+        location, ptrType, tupleType, alloca,
+        mlir::ValueRange{i32Zero, idx});
+    builder.create<mlir::LLVM::StoreOp>(location, elements[i], fieldPtr);
+  }
+  return alloca;
 }
 
 mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
@@ -1961,6 +1996,32 @@ mlir::Value HIRBuilder::visitFieldAccessExpr(FieldAccessExpr *e) {
     innerType = rt->getInner();
   else if (auto *rmt = dynamic_cast<RefMutType *>(baseAstType))
     innerType = rmt->getInner();
+
+  // Handle tuple field access: t.0, t.1, etc.
+  if (auto *tupleType = dynamic_cast<TupleType *>(innerType)) {
+    llvm::StringRef fieldName = e->getFieldName();
+    unsigned idx = 0;
+    if (!fieldName.getAsInteger(10, idx) && idx < tupleType->getElements().size()) {
+      mlir::Type elemType = convertType(tupleType->getElements()[idx]);
+      if (mlir::isa<mlir::LLVM::LLVMPointerType>(base.getType())) {
+        auto ptrType = getPtrType();
+        // Build the tuple MLIR type for GEP.
+        llvm::SmallVector<mlir::Type> elemTypes;
+        for (auto *et : tupleType->getElements())
+          elemTypes.push_back(convertType(et));
+        auto tupleLLVMType = mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, elemTypes);
+        auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(32), static_cast<int64_t>(0));
+        auto i32Idx = builder.create<mlir::LLVM::ConstantOp>(
+            location, builder.getIntegerType(32), static_cast<int64_t>(idx));
+        auto elemPtr = builder.create<mlir::LLVM::GEPOp>(
+            location, ptrType, tupleLLVMType, base,
+            mlir::ValueRange{i32Zero, i32Idx});
+        return builder.create<mlir::LLVM::LoadOp>(location, elemType, elemPtr);
+      }
+    }
+    return base;
+  }
 
   auto *namedType = dynamic_cast<NamedType *>(innerType);
   if (!namedType) return base;

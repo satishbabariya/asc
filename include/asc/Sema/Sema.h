@@ -155,6 +155,7 @@ public:
   llvm::StringMap<StructDecl *> structDecls;
   llvm::StringMap<EnumDecl *> enumDecls;
   llvm::StringMap<TraitDecl *> traitDecls;
+  llvm::StringMap<Type *> typeAliases;
 private:
 
   // Impl blocks indexed by target type name.

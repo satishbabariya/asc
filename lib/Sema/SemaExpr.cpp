@@ -326,7 +326,7 @@ Type *Sema::checkCallExpr(CallExpr *e) {
       }
     }
 
-    Type *retType = fnDecl->getReturnType();
+    Type *retType = resolveType(fnDecl->getReturnType());
 
     // Generic function monomorphization: infer type parameters from arguments.
     if (fnDecl->isGeneric() && !fnDecl->getGenericParams().empty()) {
