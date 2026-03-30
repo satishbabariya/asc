@@ -64,10 +64,11 @@ private:
   llvm::StringMap<Symbol> symbols;
 };
 
-/// Register built-in types (Option, Result, Vec, String, Box) in Sema scope.
+/// Register built-in types and traits in Sema scope.
 void registerBuiltins(ASTContext &ctx, Scope *scope,
                       llvm::StringMap<StructDecl *> &structDecls,
-                      llvm::StringMap<EnumDecl *> &enumDecls);
+                      llvm::StringMap<EnumDecl *> &enumDecls,
+                      llvm::StringMap<TraitDecl *> &traitDecls);
 
 /// Semantic analysis: name resolution, type checking, ownership inference.
 class Sema {

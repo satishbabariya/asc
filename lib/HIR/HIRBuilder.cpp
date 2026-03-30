@@ -1110,6 +1110,39 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         location, hmNewFn, mlir::ValueRange{keySize, valSize}).getResult();
   }
 
+  // Mutex::new() — create mutex.
+  if (calleeName == "Mutex_new" || calleeName == "Mutex::new") {
+    auto ptrType = getPtrType();
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    auto mutexNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_mutex_new");
+    if (!mutexNewFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {});
+      mutexNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_mutex_new", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, mutexNewFn, mlir::ValueRange{}).getResult();
+  }
+
+  // Semaphore::new(permits) — create semaphore.
+  if (calleeName == "Semaphore_new" || calleeName == "Semaphore::new") {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto semNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_semaphore_new");
+    if (!semNewFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i32Ty});
+      semNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_semaphore_new", fnType);
+    }
+    mlir::Value permits = args.empty()
+        ? builder.create<mlir::arith::ConstantIntOp>(location, 1, i32Ty).getResult()
+        : args[0];
+    return builder.create<mlir::LLVM::CallOp>(
+        location, semNewFn, mlir::ValueRange{permits}).getResult();
+  }
+
   // Box::new(value) — heap allocation.
   if (calleeName == "Box_new" || calleeName == "Box::new") {
     if (!args.empty()) {
@@ -2074,6 +2107,51 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     // For proper Option, we'd need to construct the tagged union.
     // For now, return the value and let the for-in loop check hasValue.
     return val;
+  }
+
+  // Mutex methods: .lock(), .unlock(), .try_lock()
+  if ((methodName == "lock" || methodName == "unlock" || methodName == "try_lock") &&
+      receiver && mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    std::string fnName = "__asc_mutex_" + methodName;
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(fnName);
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto retTy = (methodName == "try_lock")
+          ? static_cast<mlir::Type>(i32Ty) : static_cast<mlir::Type>(voidTy);
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(retTy, {ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, fnName, fnType);
+    }
+    auto result = builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver});
+    return (methodName == "try_lock") ? result.getResult() : mlir::Value{};
+  }
+
+  // Semaphore methods: .acquire(), .release(), .try_acquire(), .available_permits()
+  if ((methodName == "acquire" || methodName == "release" ||
+       methodName == "try_acquire" || methodName == "available_permits") &&
+      receiver && mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    std::string fnName = "__asc_semaphore_" +
+        (methodName == "available_permits" ? std::string("available") : methodName);
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(fnName);
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      bool returnsVal = (methodName == "try_acquire" || methodName == "available_permits");
+      auto retTy = returnsVal ? static_cast<mlir::Type>(i32Ty) : static_cast<mlir::Type>(voidTy);
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(retTy, {ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, fnName, fnType);
+    }
+    auto result = builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver});
+    bool returnsVal = (methodName == "try_acquire" || methodName == "available_permits");
+    return returnsVal ? result.getResult() : mlir::Value{};
   }
 
   // Channel methods: .send(value) and .recv() — single-threaded stubs.

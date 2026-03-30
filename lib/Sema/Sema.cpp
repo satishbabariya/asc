@@ -30,7 +30,7 @@ Symbol *Scope::lookupLocal(llvm::StringRef name) {
 Sema::Sema(ASTContext &ctx, DiagnosticEngine &diags)
     : ctx(ctx), diags(diags) {
   pushScope(); // global scope
-  registerBuiltins(ctx, currentScope, structDecls, enumDecls);
+  registerBuiltins(ctx, currentScope, structDecls, enumDecls, traitDecls);
 }
 
 void Sema::pushScope() {

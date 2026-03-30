@@ -9,7 +9,8 @@ namespace asc {
 /// Called at the start of Sema::analyze().
 void registerBuiltins(ASTContext &ctx, Scope *scope,
                       llvm::StringMap<StructDecl *> &structDecls,
-                      llvm::StringMap<EnumDecl *> &enumDecls) {
+                      llvm::StringMap<EnumDecl *> &enumDecls,
+                      llvm::StringMap<TraitDecl *> &traitDecls) {
   SourceLocation loc; // invalid loc for builtins
 
   // --- Option<T> ---
@@ -127,6 +128,141 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     sym.name = "Box";
     sym.decl = boxStruct;
     scope->declare("Box", std::move(sym));
+  }
+  // --- Core Traits ---
+
+  // Drop trait: fn drop(refmut<Self>): void
+  {
+    auto *dropTrait = ctx.create<TraitDecl>(
+        "Drop", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Drop"] = dropTrait;
+    Symbol sym;
+    sym.name = "Drop";
+    sym.decl = dropTrait;
+    scope->declare("Drop", std::move(sym));
+  }
+
+  // Clone trait: fn clone(ref<Self>): own<Self>
+  {
+    auto *cloneTrait = ctx.create<TraitDecl>(
+        "Clone", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Clone"] = cloneTrait;
+    Symbol sym;
+    sym.name = "Clone";
+    sym.decl = cloneTrait;
+    scope->declare("Clone", std::move(sym));
+  }
+
+  // PartialEq trait: fn eq(ref<Self>, ref<Self>): bool
+  {
+    auto *partialEqTrait = ctx.create<TraitDecl>(
+        "PartialEq", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["PartialEq"] = partialEqTrait;
+    Symbol sym;
+    sym.name = "PartialEq";
+    sym.decl = partialEqTrait;
+    scope->declare("PartialEq", std::move(sym));
+  }
+
+  // Eq trait (marker, extends PartialEq)
+  {
+    auto *eqTrait = ctx.create<TraitDecl>(
+        "Eq", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Eq"] = eqTrait;
+    Symbol sym;
+    sym.name = "Eq";
+    sym.decl = eqTrait;
+    scope->declare("Eq", std::move(sym));
+  }
+
+  // Iterator trait: fn next(refmut<Self>): Option<T>
+  {
+    GenericParam gp;
+    gp.name = "Item";
+    gp.loc = loc;
+    auto *iterTrait = ctx.create<TraitDecl>(
+        "Iterator", std::vector<GenericParam>{gp},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Iterator"] = iterTrait;
+    Symbol sym;
+    sym.name = "Iterator";
+    sym.decl = iterTrait;
+    scope->declare("Iterator", std::move(sym));
+  }
+
+  // Display trait: fn fmt(ref<Self>, refmut<Formatter>): void
+  {
+    auto *displayTrait = ctx.create<TraitDecl>(
+        "Display", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Display"] = displayTrait;
+    Symbol sym;
+    sym.name = "Display";
+    sym.decl = displayTrait;
+    scope->declare("Display", std::move(sym));
+  }
+
+  // Debug trait (same as Display but for debug formatting)
+  {
+    auto *debugTrait = ctx.create<TraitDecl>(
+        "Debug", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Debug"] = debugTrait;
+    Symbol sym;
+    sym.name = "Debug";
+    sym.decl = debugTrait;
+    scope->declare("Debug", std::move(sym));
+  }
+
+  // Send/Sync marker traits (no methods)
+  {
+    auto *sendTrait = ctx.create<TraitDecl>(
+        "Send", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Send"] = sendTrait;
+    auto *syncTrait = ctx.create<TraitDecl>(
+        "Sync", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Sync"] = syncTrait;
+  }
+
+  // Copy marker trait (no methods)
+  {
+    auto *copyTrait = ctx.create<TraitDecl>(
+        "Copy", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Copy"] = copyTrait;
+    Symbol sym;
+    sym.name = "Copy";
+    sym.decl = copyTrait;
+    scope->declare("Copy", std::move(sym));
+  }
+
+  // Default trait: fn default(): Self
+  {
+    auto *defaultTrait = ctx.create<TraitDecl>(
+        "Default", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Default"] = defaultTrait;
+    Symbol sym;
+    sym.name = "Default";
+    sym.decl = defaultTrait;
+    scope->declare("Default", std::move(sym));
   }
 }
 
