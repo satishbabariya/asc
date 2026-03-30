@@ -63,8 +63,32 @@ void __asc_panic(const char *msg, unsigned int msg_len,
   // DECISION: Use write() directly to avoid stdio dependency.
   extern long write(int fd, const void *buf, unsigned long count);
   extern void abort(void);
-  write(2, "panic: ", 7);
-  write(2, msg, msg_len);
+
+  // Helper: write an unsigned int as decimal.
+  char numbuf[12];
+  int numlen;
+
+  write(2, "panic at '", 10);
+  if (msg && msg_len > 0)
+    write(2, msg, msg_len);
+  write(2, "'", 1);
+
+  if (line > 0) {
+    write(2, " (line ", 7);
+    // Convert line number to string.
+    numlen = 0;
+    unsigned int n = line;
+    do { numbuf[11 - numlen++] = '0' + (n % 10); n /= 10; } while (n > 0);
+    write(2, numbuf + 12 - numlen, numlen);
+    if (col > 0) {
+      write(2, ":", 1);
+      numlen = 0;
+      n = col;
+      do { numbuf[11 - numlen++] = '0' + (n % 10); n /= 10; } while (n > 0);
+      write(2, numbuf + 12 - numlen, numlen);
+    }
+    write(2, ")", 1);
+  }
   write(2, "\n", 1);
   abort();
 #endif

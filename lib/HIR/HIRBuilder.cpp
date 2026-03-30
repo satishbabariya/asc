@@ -3081,6 +3081,19 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         panicMsg = sl->getValue().str();
     }
 
+    // Get source file/line info from the macro's AST location.
+    uint32_t srcLine = 0, srcCol = 0;
+    SourceLocation astLoc = e->getLocation();
+    if (astLoc.isValid()) {
+      auto lcInfo = sourceManager.getLineAndColumn(astLoc);
+      srcLine = lcInfo.line;
+      srcCol = lcInfo.column;
+    }
+
+    // Strip quotes from panic message if present.
+    if (panicMsg.size() >= 2 && panicMsg.front() == '"' && panicMsg.back() == '"')
+      panicMsg = panicMsg.substr(1, panicMsg.size() - 2);
+
     // Create global string constant for panic message.
     static unsigned panicMsgCounter = 0;
     std::string globalName = "__panic_msg_" + std::to_string(panicMsgCounter++);
@@ -3099,13 +3112,20 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
     auto msgLen = builder.create<mlir::LLVM::ConstantOp>(
         location, i32Type, static_cast<int64_t>(panicMsg.size()));
 
-    // Get source file/line info.
-    auto fileNull = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
-    auto zero = builder.create<mlir::LLVM::ConstantOp>(
+    // Source file (null for now — could add filename global).
+    mlir::Value filePtrVal;
+    mlir::Value fileLenVal;
+    filePtrVal = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+    fileLenVal = builder.create<mlir::LLVM::ConstantOp>(
         location, i32Type, static_cast<int64_t>(0));
+    auto lineVal = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Type, static_cast<int64_t>(srcLine));
+    auto colVal = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Type, static_cast<int64_t>(srcCol));
+
     builder.create<mlir::LLVM::CallOp>(
         location, panicFn,
-        mlir::ValueRange{msgPtr, msgLen, fileNull, zero, zero, zero});
+        mlir::ValueRange{msgPtr, msgLen, filePtrVal, fileLenVal, lineVal, colVal});
     builder.create<mlir::LLVM::UnreachableOp>(location);
     return {};
   }
