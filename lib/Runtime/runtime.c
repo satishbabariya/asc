@@ -42,14 +42,30 @@ void *memset(void *dst, int c, unsigned long n) {
 
 #endif // __wasm__
 
-// Thread-local unwind flag for double-panic detection.
+// Thread-local unwind flag and panic handler for drop-on-panic.
 #ifdef __wasm__
-static int __asc_in_unwind = 0;  // Wasm is single-threaded
+static int __asc_in_unwind = 0;
 #else
+#include <setjmp.h>
 _Thread_local static int __asc_in_unwind = 0;
+_Thread_local static jmp_buf *__asc_panic_jmpbuf = 0;
 #endif
 
+// Register/clear a setjmp-based panic handler for drop-on-panic.
+void __asc_set_panic_handler(void *buf) {
+#ifndef __wasm__
+  __asc_panic_jmpbuf = (jmp_buf *)buf;
+#endif
+}
+
+void __asc_clear_panic_handler(void) {
+#ifndef __wasm__
+  __asc_panic_jmpbuf = 0;
+#endif
+}
+
 // Panic handler: traps on Wasm, aborts on native.
+// If a setjmp handler is registered, longjmp to it for cleanup first.
 void __asc_panic(const char *msg, unsigned int msg_len,
                  const char *file, unsigned int file_len,
                  unsigned int line, unsigned int col) {
@@ -94,6 +110,12 @@ void __asc_panic(const char *msg, unsigned int msg_len,
     write(2, ")", 1);
   }
   write(2, "\n", 1);
+
+  // If a panic handler is registered, longjmp for cleanup.
+  if (__asc_panic_jmpbuf) {
+    longjmp(*__asc_panic_jmpbuf, 1);
+  }
+
   abort();
 #endif
 }

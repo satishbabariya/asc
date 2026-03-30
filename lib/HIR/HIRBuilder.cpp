@@ -2997,14 +2997,87 @@ mlir::Value HIRBuilder::visitForExpr(ForExpr *e) {
     return {};
   }
 
-  // Fallback: non-range iterable — just bind and visit once.
+  // Iterator-based for-in: for x in collection { body }
+  // Desugars to: let iter = collection.iter(); loop { val = iter.next(); if !val break; x = val; body; }
   mlir::Value iterable = visitExpr(e->getIterable());
+  if (!iterable) return {};
+
+  auto ptrType = getPtrType();
+  auto i32Type = builder.getIntegerType(32);
+
+  // Call .iter() on the collection to get an iterator pointer.
+  auto iterFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_iter");
+  if (!iterFn) {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, i32Type});
+    iterFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_iter", fnType);
+  }
+  auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+      location, i32Type, static_cast<int64_t>(4));
+  auto iterPtr = builder.create<mlir::LLVM::CallOp>(
+      location, iterFn, mlir::ValueRange{iterable, elemSize}).getResult();
+
+  // Declare __asc_vec_iter_next.
+  auto nextFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_iter_next");
+  if (!nextFn) {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType, i32Type});
+    nextFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_iter_next", fnType);
+  }
+
+  // Alloca for next() output value.
+  auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+      location, builder.getIntegerType(64), static_cast<int64_t>(1));
+  auto outAlloca = builder.create<mlir::LLVM::AllocaOp>(
+      location, ptrType, i32Type, i64One);
+
+  // Create loop blocks.
+  auto *currentBlock = builder.getBlock();
+  auto *parentRegion = currentBlock->getParent();
+  auto *condBlock = new mlir::Block();
+  auto *bodyBlock = new mlir::Block();
+  auto *exitBlock = new mlir::Block();
+
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(currentBlock), condBlock);
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(condBlock), bodyBlock);
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(bodyBlock), exitBlock);
+
+  builder.create<mlir::cf::BranchOp>(location, condBlock);
+
+  // Condition block: call next(), check if exhausted.
+  builder.setInsertionPointToStart(condBlock);
+  auto hasValue = builder.create<mlir::LLVM::CallOp>(
+      location, nextFn, mlir::ValueRange{iterPtr, outAlloca, elemSize}).getResult();
+  auto zero = builder.create<mlir::arith::ConstantIntOp>(location, 0, i32Type);
+  auto cond = builder.create<mlir::arith::CmpIOp>(
+      location, mlir::arith::CmpIPredicate::ne, hasValue, zero);
+  builder.create<mlir::cf::CondBranchOp>(location, cond, bodyBlock,
+                                          mlir::ValueRange{}, exitBlock,
+                                          mlir::ValueRange{});
+
+  // Body block: load value, bind to loop variable, execute body.
+  builder.setInsertionPointToStart(bodyBlock);
+  loopStack.push_back({condBlock, exitBlock});
   pushScope();
-  if (iterable && !e->getVarName().empty())
-    declare(e->getVarName(), iterable);
+  auto loopVal = builder.create<mlir::LLVM::LoadOp>(location, i32Type, outAlloca);
+  if (!e->getVarName().empty())
+    declare(e->getVarName(), loopVal);
   if (e->getBody())
     visitCompoundStmt(e->getBody());
   popScope();
+  loopStack.pop_back();
+
+  auto *bodyEnd = builder.getBlock();
+  if (bodyEnd->empty() ||
+      !bodyEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
+    builder.create<mlir::cf::BranchOp>(location, condBlock);
+
+  builder.setInsertionPointToStart(exitBlock);
   return {};
 }
 
