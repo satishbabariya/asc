@@ -1792,6 +1792,116 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       receiverTypeName = nt->getName().str();
   }
 
+  // --- Dynamic dispatch for dyn Trait ---
+  {
+    bool isDynReceiver = false;
+    std::string dynTraitName;
+    asc::Type *inner = recAstType;
+    if (inner) {
+      if (auto *ot = dynamic_cast<OwnType *>(inner)) inner = ot->getInner();
+      if (auto *rt = dynamic_cast<RefType *>(inner)) inner = rt->getInner();
+      if (auto *rmt = dynamic_cast<RefMutType *>(inner)) inner = rmt->getInner();
+      if (auto *dt = dynamic_cast<DynTraitType *>(inner)) {
+        isDynReceiver = true;
+        if (!dt->getBounds().empty())
+          dynTraitName = dt->getBounds()[0].name;
+      }
+    }
+
+    if (isDynReceiver && !dynTraitName.empty() && receiver) {
+      auto ptrType = getPtrType();
+      auto fatPtrType = mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrType, ptrType});
+
+      // Load fat pointer if receiver is alloca-backed.
+      mlir::Value fatPtr = receiver;
+      if (mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+        if (auto *defOp = receiver.getDefiningOp()) {
+          if (auto allocaOp = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp)) {
+            if (auto elemType = allocaOp.getElemType()) {
+              if (auto st = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(elemType)) {
+                if (st.getBody().size() == 2)
+                  fatPtr = builder.create<mlir::LLVM::LoadOp>(location, st, receiver);
+              }
+            }
+          }
+        }
+      }
+
+      mlir::Value dataPtr, vtablePtr;
+      if (mlir::isa<mlir::LLVM::LLVMStructType>(fatPtr.getType())) {
+        dataPtr = builder.create<mlir::LLVM::ExtractValueOp>(location, fatPtr, 0);
+        vtablePtr = builder.create<mlir::LLVM::ExtractValueOp>(location, fatPtr, 1);
+      } else {
+        dataPtr = fatPtr;
+        vtablePtr = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+      }
+
+      // Find method index in trait.
+      unsigned methodIndex = 0;
+      auto tit = sema.traitDecls.find(dynTraitName);
+      if (tit != sema.traitDecls.end()) {
+        for (const auto &item : tit->second->getItems()) {
+          if (item.method && item.method->getName() == methodName)
+            break;
+          if (item.method)
+            methodIndex++;
+        }
+      }
+
+      // Build vtable struct type for GEP.
+      llvm::SmallVector<mlir::Type> vtFields;
+      if (tit != sema.traitDecls.end()) {
+        for (const auto &item : tit->second->getItems())
+          if (item.method) vtFields.push_back(ptrType);
+      }
+      vtFields.push_back(builder.getIntegerType(64));
+      vtFields.push_back(builder.getIntegerType(64));
+      auto vtableType = mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, vtFields);
+
+      auto i32Zero = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(32), static_cast<int64_t>(0));
+      auto i32Idx = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(32), static_cast<int64_t>(methodIndex));
+      auto methodSlot = builder.create<mlir::LLVM::GEPOp>(
+          location, ptrType, vtableType, vtablePtr,
+          mlir::ValueRange{i32Zero, i32Idx});
+      auto fnPtr = builder.create<mlir::LLVM::LoadOp>(location, ptrType, methodSlot);
+
+      // Build call args: data_ptr as self, then remaining args.
+      llvm::SmallVector<mlir::Value> callArgs = {dataPtr};
+      for (unsigned i = 1; i < args.size(); ++i)
+        callArgs.push_back(args[i]);
+
+      // Determine return type from trait method.
+      mlir::Type retType;
+      if (tit != sema.traitDecls.end()) {
+        unsigned idx = 0;
+        for (const auto &item : tit->second->getItems()) {
+          if (item.method && idx == methodIndex) {
+            if (item.method->getReturnType())
+              retType = convertType(item.method->getReturnType());
+            break;
+          }
+          if (item.method) idx++;
+        }
+      }
+
+      llvm::SmallVector<mlir::Type> resultTypes;
+      if (retType && !mlir::isa<mlir::NoneType>(retType))
+        resultTypes.push_back(retType);
+
+      llvm::SmallVector<mlir::Value> allOperands;
+      allOperands.push_back(fnPtr);
+      allOperands.append(callArgs.begin(), callArgs.end());
+
+      mlir::OperationState callState(location, "llvm.call");
+      callState.addOperands(allOperands);
+      callState.addTypes(resultTypes);
+      auto *callOp = builder.create(callState);
+      return callOp->getNumResults() > 0 ? callOp->getResult(0) : mlir::Value{};
+    }
+  }
+
   // Clone: .clone() → copy the value.
   // For pointer-backed types (structs), allocate new memory and memcpy.
   // For scalars, just return the value.
@@ -2418,6 +2528,41 @@ mlir::Value HIRBuilder::visitCastExpr(CastExpr *e) {
   mlir::Type targetType = convertType(e->getTargetType());
   if (!targetType || targetType == operand.getType())
     return operand;
+
+  // Cast to dyn Trait → build fat pointer { data_ptr, vtable_ptr }.
+  if (auto *dynTarget = dynamic_cast<DynTraitType *>(e->getTargetType())) {
+    auto ptrType = getPtrType();
+    auto fatPtrType = mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrType, ptrType});
+
+    mlir::Value dataPtr = operand;
+
+    // Determine concrete type name from operand's AST type.
+    std::string concreteTypeName;
+    asc::Type *opAstType = e->getOperand()->getType();
+    if (opAstType) {
+      asc::Type *inner = opAstType;
+      if (auto *ot = dynamic_cast<OwnType *>(opAstType)) inner = ot->getInner();
+      if (auto *rt = dynamic_cast<RefType *>(opAstType)) inner = rt->getInner();
+      if (auto *rmt = dynamic_cast<RefMutType *>(opAstType)) inner = rmt->getInner();
+      if (auto *nt = dynamic_cast<NamedType *>(inner))
+        concreteTypeName = nt->getName().str();
+    }
+
+    std::string traitName;
+    if (!dynTarget->getBounds().empty())
+      traitName = dynTarget->getBounds()[0].name;
+
+    std::string vtableName = "__vtable_" + traitName + "_" + concreteTypeName;
+    mlir::Value vtablePtr;
+    if (module.lookupSymbol(vtableName))
+      vtablePtr = builder.create<mlir::LLVM::AddressOfOp>(location, ptrType, vtableName);
+    else
+      vtablePtr = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+
+    auto undef = builder.create<mlir::LLVM::UndefOp>(location, fatPtrType);
+    auto withData = builder.create<mlir::LLVM::InsertValueOp>(location, undef, dataPtr, 0);
+    return builder.create<mlir::LLVM::InsertValueOp>(location, withData, vtablePtr, 1);
+  }
 
   // Integer-to-integer cast.
   if (operand.getType().isIntOrIndex() && targetType.isIntOrIndex()) {

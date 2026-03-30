@@ -423,6 +423,20 @@ Type *Sema::checkMethodCallExpr(MethodCallExpr *e) {
     }
   }
 
+  // dyn Trait method resolution: look up return type from trait declaration.
+  if (auto *dt = dynamic_cast<DynTraitType *>(baseType)) {
+    if (!dt->getBounds().empty()) {
+      auto tit = traitDecls.find(dt->getBounds()[0].name);
+      if (tit != traitDecls.end()) {
+        for (const auto &item : tit->second->getItems()) {
+          if (item.method && item.method->getName() == e->getMethodName()) {
+            return item.method->getReturnType();
+          }
+        }
+      }
+    }
+  }
+
   // Built-in methods: clone() returns the receiver type.
   if (e->getMethodName() == "clone")
     return baseType;
@@ -633,7 +647,12 @@ Type *Sema::checkRangeExpr(RangeExpr *e) {
 Type *Sema::checkCastExpr(CastExpr *e) {
   Type *srcType = checkExpr(e->getOperand());
   Type *dstType = e->getTargetType();
-  // Validate: only numeric casts allowed.
+  // Allow casts to dyn Trait.
+  if (dstType && dynamic_cast<DynTraitType *>(dstType)) {
+    markExprOwnership(e, OwnershipKind::Owned);
+    return dstType;
+  }
+  // Validate: only numeric casts allowed otherwise.
   if (srcType && dstType) {
     bool srcNum = dynamic_cast<BuiltinType *>(srcType) != nullptr;
     bool dstNum = dynamic_cast<BuiltinType *>(dstType) != nullptr;
