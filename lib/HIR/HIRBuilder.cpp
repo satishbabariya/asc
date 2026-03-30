@@ -266,6 +266,12 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
     return getPtrType();
   }
 
+  // dyn Trait → fat pointer { data_ptr: ptr, vtable_ptr: ptr }
+  if (auto *dt = dynamic_cast<DynTraitType *>(astType)) {
+    auto ptrType = getPtrType();
+    return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrType, ptrType});
+  }
+
   // Nullable type → same as Option (tagged union).
   if (auto *nullable = dynamic_cast<NullableType *>(astType)) {
     mlir::Type inner = convertType(nullable->getInner());
@@ -510,6 +516,55 @@ mlir::Value HIRBuilder::visitImplDecl(ImplDecl *d) {
       visitFunctionDecl(m);
     }
   }
+
+  // Generate vtable for trait impls.
+  if (d->isTraitImpl() && !typeName.empty()) {
+    std::string traitName;
+    if (auto *nt = dynamic_cast<NamedType *>(d->getTraitType()))
+      traitName = nt->getName().str();
+    if (!traitName.empty()) {
+      std::string vtableName = "__vtable_" + traitName + "_" + typeName;
+      if (!module.lookupSymbol(vtableName)) {
+        auto ptrType = getPtrType();
+        auto i64Type = builder.getIntegerType(64);
+
+        // Build vtable type: { ptr per method, i64 size, i64 align }
+        llvm::SmallVector<mlir::Type> fields;
+        for (auto *m : d->getMethods())
+          fields.push_back(ptrType);
+        fields.push_back(i64Type);
+        fields.push_back(i64Type);
+        auto vtableType = mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, fields);
+
+        auto savedIP = builder.saveInsertionPoint();
+        builder.setInsertionPointToStart(module.getBody());
+        auto loc = builder.getUnknownLoc();
+
+        auto global = builder.create<mlir::LLVM::GlobalOp>(
+            loc, vtableType, /*isConstant=*/true,
+            mlir::LLVM::Linkage::Private, vtableName, mlir::Attribute{});
+
+        auto &initRegion = global.getInitializerRegion();
+        auto *initBlock = builder.createBlock(&initRegion);
+        builder.setInsertionPointToStart(initBlock);
+
+        mlir::Value vtable = builder.create<mlir::LLVM::UndefOp>(loc, vtableType);
+        unsigned idx = 0;
+        for (auto *m : d->getMethods()) {
+          std::string mangledMethod = typeName + "_" + m->getName().str();
+          auto fnAddr = builder.create<mlir::LLVM::AddressOfOp>(loc, ptrType, mangledMethod);
+          vtable = builder.create<mlir::LLVM::InsertValueOp>(loc, vtable, fnAddr, idx++);
+        }
+        auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, static_cast<int64_t>(8));
+        vtable = builder.create<mlir::LLVM::InsertValueOp>(loc, vtable, sizeVal, idx++);
+        vtable = builder.create<mlir::LLVM::InsertValueOp>(loc, vtable, sizeVal, idx++);
+        builder.create<mlir::LLVM::ReturnOp>(loc, vtable);
+
+        builder.restoreInsertionPoint(savedIP);
+      }
+    }
+  }
+
   return {};
 }
 mlir::Value HIRBuilder::visitTypeAliasDecl(TypeAliasDecl *) { return {}; }
