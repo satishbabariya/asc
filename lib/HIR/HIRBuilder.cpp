@@ -1614,6 +1614,16 @@ mlir::Value HIRBuilder::visitStructLiteral(StructLiteral *e) {
         auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
             location, ptrType, structType, alloca,
             mlir::ValueRange{i32Zero, fieldIdxConst});
+        // If the field is a struct type but the value is a pointer (from nested
+        // struct literal alloca), load the struct value before storing.
+        auto llvmStructType = mlir::cast<mlir::LLVM::LLVMStructType>(structType);
+        auto fieldTypes = llvmStructType.getBody();
+        if (fieldIdx < fieldTypes.size() &&
+            mlir::isa<mlir::LLVM::LLVMStructType>(fieldTypes[fieldIdx]) &&
+            mlir::isa<mlir::LLVM::LLVMPointerType>(fieldVal.getType())) {
+          fieldVal = builder.create<mlir::LLVM::LoadOp>(
+              location, fieldTypes[fieldIdx], fieldVal);
+        }
         builder.create<mlir::LLVM::StoreOp>(location, fieldVal, fieldPtr);
       }
     }
@@ -2523,8 +2533,25 @@ mlir::Value HIRBuilder::visitMatchExpr(MatchExpr *e) {
     bool isLast = (i + 1 == e->getArms().size());
     bool isWildcard = dynamic_cast<WildcardPattern *>(arm.pattern) != nullptr;
     bool isIdent = dynamic_cast<IdentPattern *>(arm.pattern) != nullptr;
-    mlir::Block *nextCheck = isLast ? mergeBlock
-        : (i < checkBlocks.size() ? checkBlocks[i] : mergeBlock);
+    // For the last arm's fallthrough, if mergeBlock has args we can't branch
+    // to it without a value. Create an unreachable block for exhaustive matches.
+    mlir::Block *nextCheck;
+    if (isLast) {
+      if (mergeBlock->getNumArguments() > 0) {
+        auto *unreachableBlock = new mlir::Block();
+        parentRegion->getBlocks().insertAfter(
+            mlir::Region::iterator(armBlocks.back()), unreachableBlock);
+        auto savedIP = builder.saveInsertionPoint();
+        builder.setInsertionPointToStart(unreachableBlock);
+        builder.create<mlir::LLVM::UnreachableOp>(location);
+        builder.restoreInsertionPoint(savedIP);
+        nextCheck = unreachableBlock;
+      } else {
+        nextCheck = mergeBlock;
+      }
+    } else {
+      nextCheck = (i < checkBlocks.size()) ? checkBlocks[i] : mergeBlock;
+    }
 
     // --- Emit condition check in current block ---
     if (isWildcard || isIdent) {
