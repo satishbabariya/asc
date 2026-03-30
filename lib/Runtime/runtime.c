@@ -43,7 +43,11 @@ void *memset(void *dst, int c, unsigned long n) {
 #endif // __wasm__
 
 // Thread-local unwind flag for double-panic detection.
-static int __asc_in_unwind = 0;
+#ifdef __wasm__
+static int __asc_in_unwind = 0;  // Wasm is single-threaded
+#else
+_Thread_local static int __asc_in_unwind = 0;
+#endif
 
 // Panic handler: traps on Wasm, aborts on native.
 void __asc_panic(const char *msg, unsigned int msg_len,
@@ -94,13 +98,11 @@ void __asc_panic(const char *msg, unsigned int msg_len,
 #endif
 }
 
-// Print a string (ptr + len) to stdout.
-extern long write(int fd, const void *buf, unsigned long count);
+// Print functions — defined in wasi_io.c for wasm, here for native only.
+// Note: __asc_print and __asc_eprint are in wasi_io.c to avoid duplicates.
 
-void __asc_print(const char *ptr, unsigned int len) {
-  if (ptr && len > 0)
-    write(1, ptr, len);
-}
+#ifndef __wasm__
+extern long write(int fd, const void *buf, unsigned long count);
 
 void __asc_println(const char *ptr, unsigned int len) {
   if (ptr && len > 0)
@@ -108,7 +110,6 @@ void __asc_println(const char *ptr, unsigned int len) {
   write(1, "\n", 1);
 }
 
-// Print an integer to stdout.
 void __asc_print_i32(int value) {
   char buf[12];
   int neg = 0;
@@ -134,6 +135,7 @@ void __asc_print_i32_ln(int value) {
   __asc_print_i32(value);
   write(1, "\n", 1);
 }
+#endif
 
 // _start entry point for Wasm.
 extern int main(void);

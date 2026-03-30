@@ -70,3 +70,36 @@ void __asc_vec_free(AscVec *v) {
     free(v);
   }
 }
+
+// --- Vec Iterator ---
+// Iterator layout: { data_ptr, index, len }
+typedef struct {
+  const char *data_ptr;
+  unsigned long index;
+  unsigned long len;
+} AscVecIter;
+
+// Create an iterator from a vec.
+AscVecIter *__asc_vec_iter(AscVec *v, unsigned int elem_size) {
+  AscVecIter *it = (AscVecIter *)malloc(sizeof(AscVecIter));
+  it->data_ptr = v ? v->ptr : 0;
+  it->index = 0;
+  it->len = v ? v->len : 0;
+  (void)elem_size;
+  return it;
+}
+
+// Get next element from iterator.
+// Returns 1 and copies to out_ptr if available, 0 if exhausted.
+int __asc_vec_iter_next(AscVecIter *it, void *out_ptr, unsigned int elem_size) {
+  if (!it || it->index >= it->len) return 0;
+  if (out_ptr && it->data_ptr)
+    memcpy(out_ptr, it->data_ptr + it->index * elem_size, elem_size);
+  it->index++;
+  return 1;
+}
+
+// Free iterator.
+void __asc_vec_iter_free(AscVecIter *it) {
+  free(it);
+}

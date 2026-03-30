@@ -2029,6 +2029,53 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return result.getResult();
   }
 
+  // Vec::iter() → call __asc_vec_iter(vec_ptr, elem_size) → iterator ptr.
+  if (methodName == "iter" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto iterFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_iter");
+    if (!iterFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, i32Ty});
+      iterFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_iter", fnType);
+    }
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4)); // default i32 elements
+    return builder.create<mlir::LLVM::CallOp>(
+        location, iterFn, mlir::ValueRange{receiver, elemSize}).getResult();
+  }
+
+  // VecIter::next() → call __asc_vec_iter_next(iter_ptr, out_ptr, elem_size).
+  // Returns the loaded value if available, or creates an Option enum.
+  if (methodName == "next" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto nextFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_iter_next");
+    if (!nextFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrType, ptrType, i32Ty});
+      nextFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_iter_next", fnType);
+    }
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4));
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto outAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, i32Ty, i64One);
+    auto hasValue = builder.create<mlir::LLVM::CallOp>(
+        location, nextFn, mlir::ValueRange{receiver, outAlloca, elemSize}).getResult();
+    // Load the value if hasValue == 1.
+    auto val = builder.create<mlir::LLVM::LoadOp>(location, i32Ty, outAlloca);
+    // Return the loaded value — the caller decides how to use it.
+    // For proper Option, we'd need to construct the tagged union.
+    // For now, return the value and let the for-in loop check hasValue.
+    return val;
+  }
+
   // Channel methods: .send(value) and .recv() — single-threaded stubs.
   if (methodName == "send" && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
