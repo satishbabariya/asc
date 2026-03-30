@@ -6,10 +6,9 @@ struct Path {
 }
 
 impl Path {
-  /// Creates a Path by borrowing a string slice (zero-copy view).
-  fn from_str(s: ref<str>): ref<Path> {
-    // Path is layout-compatible with str for borrow purposes.
-    return unsafe { &*(s as *const str as *const Path) };
+  /// Creates an owned Path from a string slice.
+  fn from_str(s: ref<str>): own<Path> {
+    return Path::new(String::from(s));
   }
 
   /// Creates an owned Path from an owned String.
