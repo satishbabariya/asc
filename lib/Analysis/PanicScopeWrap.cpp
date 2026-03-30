@@ -5,6 +5,7 @@
 // destructors run on unwind.
 
 #include "asc/Analysis/PanicScopeWrap.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -20,8 +21,35 @@ namespace asc {
 //===----------------------------------------------------------------------===//
 
 static bool isOwnedType(mlir::Type type) {
+  // Check for own.val custom dialect type.
   llvm::StringRef typeName = type.getAbstractType().getName();
-  return typeName.contains("own.val");
+  if (typeName.contains("own.val"))
+    return true;
+  // Also detect LLVM pointer types — struct/heap allocations are owned.
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(type))
+    return true;
+  return false;
+}
+
+/// Check if a specific value represents an owned resource.
+static bool isOwnedValue(mlir::Value value) {
+  if (auto *defOp = value.getDefiningOp()) {
+    // Alloca of struct type → stack-owned resource needing cleanup.
+    if (auto allocaOp = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp)) {
+      if (auto elemType = allocaOp.getElemType()) {
+        if (mlir::isa<mlir::LLVM::LLVMStructType>(elemType))
+          return true;
+      }
+    }
+    // malloc calls → heap-owned resource.
+    if (auto callOp = mlir::dyn_cast<mlir::LLVM::CallOp>(defOp)) {
+      if (auto callee = callOp.getCallee()) {
+        if (*callee == "malloc" || callee->starts_with("__asc_"))
+          return true;
+      }
+    }
+  }
+  return isOwnedType(value.getType());
 }
 
 bool PanicScopeWrapPass::canPanic(mlir::Operation *op) const {
@@ -147,7 +175,7 @@ void PanicScopeWrapPass::computeLiveAcrossPanic(ScopeInfo &scope) {
       return;
 
     for (mlir::Value result : op->getResults()) {
-      if (isOwnedType(result.getType())) {
+      if (isOwnedValue(result)) {
         ownedValues.insert(result);
 
         // Check if this definition is before the first panic point.
@@ -164,7 +192,7 @@ void PanicScopeWrapPass::computeLiveAcrossPanic(ScopeInfo &scope) {
           mlir::dyn_cast<mlir::func::FuncOp>(scope.scopeOp)) {
     for (mlir::Value arg :
          funcOp.getBody().front().getArguments()) {
-      if (isOwnedType(arg.getType())) {
+      if (isOwnedValue(arg)) {
         definedBeforePanic.insert(arg);
       }
     }
