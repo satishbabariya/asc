@@ -106,6 +106,25 @@ struct OwnershipLoweringPass
                  name == "own.cleanup_scope") {
         op->erase();
       } else if (name == "own.rethrow" || name == "own.resume") {
+        // After cleanup, clear panic handler and abort.
+        auto voidTy = mlir::LLVM::LLVMVoidType::get(ctx);
+        auto clearFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_clear_panic_handler");
+        if (!clearFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto ty = mlir::LLVM::LLVMFunctionType::get(voidTy, {});
+          clearFn = builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_clear_panic_handler", ty);
+        }
+        builder.create<mlir::LLVM::CallOp>(loc, clearFn, mlir::ValueRange{});
+
+        auto abortFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("abort");
+        if (!abortFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto ty = mlir::LLVM::LLVMFunctionType::get(voidTy, {});
+          abortFn = builder.create<mlir::LLVM::LLVMFuncOp>(loc, "abort", ty);
+        }
+        builder.create<mlir::LLVM::CallOp>(loc, abortFn, mlir::ValueRange{});
         builder.create<mlir::LLVM::UnreachableOp>(loc);
         op->erase();
       } else {
