@@ -2155,19 +2155,56 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
   }
 
   // Channel methods: .send(value) and .recv() — single-threaded stubs.
+  // Channel send: call __asc_chan_send(chan_ptr, &value, elem_size).
   if (methodName == "send" && receiver &&
-      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
-    // Store value to channel buffer (simplified: just store at channel ptr).
-    if (args.size() > 1) {
-      builder.create<mlir::LLVM::StoreOp>(location, args[1], receiver);
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    auto sendFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_chan_send");
+    if (!sendFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, ptrType, i32Ty});
+      sendFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_chan_send", fnType);
     }
+    // Store value to temp alloca, pass its address.
+    mlir::Value val = args[1];
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto valAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, val.getType(), i64One);
+    builder.create<mlir::LLVM::StoreOp>(location, val, valAlloca);
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4));
+    builder.create<mlir::LLVM::CallOp>(
+        location, sendFn, mlir::ValueRange{receiver, valAlloca, elemSize});
     return {};
   }
+
+  // Channel recv: call __asc_chan_recv(chan_ptr, &out, elem_size), load result.
   if (methodName == "recv" && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
-    // Load value from channel buffer (simplified).
-    auto i32Type = builder.getIntegerType(32);
-    return builder.create<mlir::LLVM::LoadOp>(location, i32Type, receiver);
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    auto recvFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_chan_recv");
+    if (!recvFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, ptrType, i32Ty});
+      recvFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_chan_recv", fnType);
+    }
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto outAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, i32Ty, i64One);
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4));
+    builder.create<mlir::LLVM::CallOp>(
+        location, recvFn, mlir::ValueRange{receiver, outAlloca, elemSize});
+    return builder.create<mlir::LLVM::LoadOp>(location, i32Ty, outAlloca);
   }
   if (methodName == "join" && receiver) {
     // No-op for single-threaded mode.
@@ -3413,21 +3450,27 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
   // Channel creation: chan_make(capacity) → malloc for channel struct.
   if (name == "chan_make") {
     auto ptrType = getPtrType();
-    auto i64Type = builder.getIntegerType(64);
-    // Allocate a channel struct: { buffer_ptr, capacity, head, tail, len }
-    // For simplicity, allocate a fixed-size buffer.
-    auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
-        location, i64Type, static_cast<int64_t>(256));
-    auto mallocFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
-    if (!mallocFn) {
+    auto i32Type = builder.getIntegerType(32);
+    // Call __asc_chan_make(capacity, elem_size) from channel_rt.c.
+    auto chanMakeFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_chan_make");
+    if (!chanMakeFn) {
       mlir::OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPointToStart(module.getBody());
-      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
-      mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "malloc", fnType);
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i32Type, i32Type});
+      chanMakeFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_chan_make", fnType);
     }
-    auto chanPtr = builder.create<mlir::LLVM::CallOp>(
-        location, mallocFn, mlir::ValueRange{sizeConst}).getResult();
-    return chanPtr;
+    // Default: capacity=16, elem_size=4 (i32).
+    int32_t capacity = 16;
+    if (!e->getArgs().empty()) {
+      if (auto *lit = dynamic_cast<IntegerLiteral *>(e->getArgs()[0]))
+        capacity = static_cast<int32_t>(lit->getValue());
+    }
+    auto capConst = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Type, static_cast<int64_t>(capacity));
+    auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Type, static_cast<int64_t>(4));
+    return builder.create<mlir::LLVM::CallOp>(
+        location, chanMakeFn, mlir::ValueRange{capConst, sizeConst}).getResult();
   }
 
   // Task spawn: task_spawn(closure) → call pthread_create or wasi_thread_start.
