@@ -165,7 +165,7 @@ void Sema::checkImplDecl(ImplDecl *d) {
 }
 
 void Sema::checkVarDecl(VarDecl *d) {
-  Type *type = d->getType();
+  Type *type = resolveType(d->getType());
 
   // Infer type from initializer.
   if (d->getInit()) {
