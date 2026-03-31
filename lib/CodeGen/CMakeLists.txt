@@ -1,4 +1,5 @@
 add_library(ascCodeGen
+  PanicLowering.cpp
   OwnershipLowering.cpp
   ConcurrencyLowering.cpp
   CodeGen.cpp

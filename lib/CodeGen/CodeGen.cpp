@@ -1,6 +1,7 @@
 #include "asc/CodeGen/CodeGen.h"
 #include "asc/CodeGen/ConcurrencyLowering.h"
 #include "asc/CodeGen/OwnershipLowering.h"
+#include "asc/CodeGen/PanicLowering.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVMPass.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -94,7 +95,8 @@ bool CodeGenerator::runMLIRLowering(mlir::ModuleOp module) {
   pm.enableVerifier(false);
 
   // Custom lowering passes.
-  pm.addPass(createOwnershipLoweringPass());
+  pm.addPass(createPanicLoweringPass());         // try/catch → setjmp first
+  pm.addPass(createOwnershipLoweringPass());     // then own.alloc/drop/move
   pm.addPass(createConcurrencyLoweringPass(llvm::Triple(opts.targetTriple)));
 
   // Canonicalization: constant folding, dead code elimination.
