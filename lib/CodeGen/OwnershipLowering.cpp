@@ -104,6 +104,11 @@ struct OwnershipLoweringPass
         op->erase();
       } else if (name == "own.try_scope" || name == "own.catch_scope" ||
                  name == "own.cleanup_scope") {
+        // PanicScopeWrap emits these with regions. The setjmp/longjmp
+        // infrastructure exists in the runtime but wiring it into MLIR
+        // ops with regions requires careful block manipulation.
+        // MVP: erase the ops. __asc_panic still prints messages + aborts.
+        // The handler registration is in the runtime for future use.
         op->erase();
       } else if (name == "own.rethrow" || name == "own.resume") {
         // After cleanup, clear panic handler and abort.

@@ -3677,23 +3677,99 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
   // For now, just call the closure directly (single-threaded emulation).
   if (name == "task_spawn") {
     if (!e->getArgs().empty()) {
-      mlir::Value closure = visitExpr(e->getArgs()[0]);
-      // Call the closure directly for single-threaded mode.
-      if (closure && mlir::isa<mlir::LLVM::LLVMPointerType>(closure.getType())) {
+      mlir::Value closureFnPtr = visitExpr(e->getArgs()[0]);
+      if (closureFnPtr && mlir::isa<mlir::LLVM::LLVMPointerType>(closureFnPtr.getType())) {
+        auto ptrType = getPtrType();
         auto i32Type = builder.getIntegerType(32);
-        mlir::OperationState callState(location, "llvm.call");
-        callState.addOperands(closure);
-        callState.addTypes({});
-        builder.create(callState);
+        auto i64Type = builder.getIntegerType(64);
+
+        // Get the closure function name from AddressOfOp.
+        std::string closureFnName;
+        if (auto *defOp = closureFnPtr.getDefiningOp())
+          if (auto addrOp = mlir::dyn_cast<mlir::LLVM::AddressOfOp>(defOp))
+            closureFnName = addrOp.getGlobalName().str();
+
+        // Generate pthread-compatible wrapper: ptr __task_N_wrapper(ptr arg)
+        static unsigned taskCounter = 0;
+        std::string wrapperName = "__task_" + std::to_string(taskCounter++) + "_wrapper";
+
+        auto savedIP = builder.saveInsertionPoint();
+        builder.setInsertionPointToEnd(module.getBody());
+
+        auto wrapperFnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+        auto wrapperFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+            location, wrapperName, wrapperFnType);
+        auto *entryBlock = wrapperFn.addEntryBlock();
+        builder.setInsertionPointToStart(entryBlock);
+
+        // Call the actual closure function (no args — captures via globals).
+        if (!closureFnName.empty()) {
+          auto closureCallee = module.lookupSymbol<mlir::func::FuncOp>(closureFnName);
+          if (closureCallee) {
+            auto cft = closureCallee.getFunctionType();
+            if (cft.getNumInputs() == 0) {
+              builder.create<mlir::func::CallOp>(location, closureCallee, mlir::ValueRange{});
+            }
+          }
+        }
+        auto null = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+        builder.create<mlir::LLVM::ReturnOp>(location, mlir::ValueRange{null});
+        builder.restoreInsertionPoint(savedIP);
+
+        // Declare pthread_create: i32 (ptr, ptr, ptr, ptr)
+        auto pthreadCreateFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_create");
+        if (!pthreadCreateFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type,
+              {ptrType, ptrType, ptrType, ptrType});
+          pthreadCreateFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+              location, "pthread_create", fnType);
+        }
+
+        // Alloca for pthread_t.
+        auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+            location, i64Type, static_cast<int64_t>(1));
+        auto tidAlloca = builder.create<mlir::LLVM::AllocaOp>(
+            location, ptrType, i64Type, i64One);
+
+        auto wrapperAddr = builder.create<mlir::LLVM::AddressOfOp>(
+            location, ptrType, wrapperName);
+        auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+
+        // pthread_create(&tid, NULL, wrapper, NULL)
+        builder.create<mlir::LLVM::CallOp>(location, pthreadCreateFn,
+            mlir::ValueRange{tidAlloca, nullArg, wrapperAddr, nullArg});
+
+        return tidAlloca; // handle = pointer to thread_id
       }
     }
-    // Return a handle (null pointer for single-threaded).
     auto ptrType = getPtrType();
     return builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
   }
 
-  // Task join: task_join(handle) → no-op for single-threaded.
+  // Task join: pthread_join(handle).
   if (name == "task_join") {
+    if (!e->getArgs().empty()) {
+      mlir::Value handle = visitExpr(e->getArgs()[0]);
+      if (handle && mlir::isa<mlir::LLVM::LLVMPointerType>(handle.getType())) {
+        auto ptrType = getPtrType();
+        auto i32Type = builder.getIntegerType(32);
+
+        auto pthreadJoinFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_join");
+        if (!pthreadJoinFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType});
+          pthreadJoinFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+              location, "pthread_join", fnType);
+        }
+
+        auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+        builder.create<mlir::LLVM::CallOp>(location, pthreadJoinFn,
+            mlir::ValueRange{handle, nullArg});
+      }
+    }
     return {};
   }
 
