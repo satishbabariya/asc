@@ -3,8 +3,81 @@
 AssemblyScript compiler built on LLVM, with MLIR as the HIR layer and a
 Rust-inspired ownership model. No garbage collector. All LLVM targets supported.
 
-> **Status:** RFC phase — implementation not yet started.  
+> **Status:** Implementation in progress — compiler builds and runs end-to-end.  
 > RFCs are the source of truth for all design decisions.
+
+## Building
+
+### Prerequisites
+
+| Dependency | Version | Install |
+|---|---|---|
+| CMake | ≥ 3.20 | `brew install cmake` |
+| LLVM + MLIR | 18.x | `brew install llvm@18` |
+| Clang | 18.x | bundled with `llvm@18` |
+| Ninja (optional) | any | `brew install ninja` |
+
+> **Apple Silicon note:** Homebrew installs LLVM as native `arm64`. If your
+> terminal is running under Rosetta (`uname -m` prints `x86_64`), prefix every
+> `cmake` and build command with `arch -arm64`.
+
+### Configure
+
+```bash
+mkdir build && cd build
+
+cmake .. \
+  -DLLVM_DIR=/opt/homebrew/opt/llvm@18/lib/cmake/llvm \
+  -DMLIR_DIR=/opt/homebrew/opt/llvm@18/lib/cmake/mlir \
+  -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm@18/bin/clang \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@18/bin/clang++ \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_BUILD_TYPE=Debug
+```
+
+Drop `-DCMAKE_OSX_ARCHITECTURES=arm64` on Linux or when running in a native
+arm64 shell. For a release build, change `Debug` to `Release`.
+
+### Build
+
+```bash
+cmake --build . --parallel 8
+```
+
+On Apple Silicon under Rosetta:
+
+```bash
+arch -arm64 cmake --build . --parallel 8
+```
+
+The `asc` binary is written to `build/tools/asc/asc`.
+
+### Verify
+
+```bash
+./tools/asc/asc --help
+```
+
+Expected output:
+
+```
+Usage: asc <command> [options] <file>
+
+Commands:
+  build   Compile to output (default)
+  check   Frontend + borrow checker only
+  fmt     Format source
+  doc     Extract documentation
+  lsp     Start LSP server
+```
+
+### Run tests
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+---
 
 ## Quick Links
 
@@ -91,31 +164,39 @@ Suggested prompts to get started:
 "Based on RFC-0005 and RFC-0007, write RFC-0011 covering weak references and cycles"
 ```
 
-## Repository Layout (planned)
+## Repository Layout
 
 ```
-asc-llvm-compiler/
-├── rfcs/                          # Design documents (this directory)
-│   ├── RFC-0001-*.md … RFC-0010-*.md
-│   └── decisions/
-├── include/asc/                   # C++ headers
+asc/
+├── rfcs/                          # Design documents (20 RFCs)
+│   ├── RFC-0001-*.md … RFC-0020-*.md
+│   └── decisions/                 # Recorded design decisions with rationale
+├── include/asc/                   # C++ headers (33 files)
 │   ├── Basic/                     # SourceManager, Diagnostics, TokenKinds
-│   ├── Lex/                       # Lexer
+│   ├── Lex/                       # Lexer, Token
 │   ├── Parse/                     # Parser
-│   ├── AST/                       # AST nodes, ASTContext
+│   ├── AST/                       # Decl/Stmt/Expr nodes, ASTContext, Type
 │   ├── Sema/                      # Semantic analysis
-│   ├── HIR/                       # MLIR dialect definitions
-│   ├── Analysis/                  # Borrow checker passes
-│   ├── CodeGen/                   # LLVM IR lowering
+│   ├── HIR/                       # MLIR own + task dialect definitions
+│   ├── Analysis/                  # Borrow checker passes (7 passes)
+│   ├── CodeGen/                   # LLVM IR lowering passes
 │   └── Driver/                    # CLI driver
-├── lib/                           # C++ implementation
+├── lib/                           # C++ implementation (33 files)
 │   ├── Basic/ Lex/ Parse/ AST/ Sema/ HIR/ Analysis/ CodeGen/ Driver/
+│   └── Runtime/                   # C runtime (vec, string, hashmap, channel,
+│                                  #   sync, atomics, clock, random, WASI I/O)
+├── std/                           # Standard library (.ts modules, 67 files)
+│   ├── core/ collections/ mem/ sync/ thread/ async/ io/ fs/
+│   ├── json/ encoding/ crypto/ path/ config/
+│   └── prelude.ts
 ├── tools/asc/                     # CLI entry point (main.cpp)
-├── tests/
-│   ├── borrow-check/              # Expected-error tests for borrow checker
-│   ├── codegen/                   # Wasm output snapshot tests
-│   └── ui/                        # CLI output tests
-└── README.md
+├── test/
+│   ├── e2e/                       # End-to-end tests (96 .ts programs)
+│   ├── integration/               # Integration tests (10)
+│   ├── Lex/ Parse/ Sema/          # Stage-level lit tests
+│   └── lit.cfg.py
+├── unittests/                     # GoogleTest unit tests
+└── build/                         # CMake build output (git-ignored)
 ```
 
 ## LLVM / MLIR References
