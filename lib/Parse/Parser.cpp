@@ -147,6 +147,9 @@ Decl *Parser::parseItem() {
     return nullptr;
   } else {
     error("expected declaration");
+    // Advance past the unexpected token to prevent infinite loops.
+    if (!tok.is(tok::eof))
+      advance();
     return nullptr;
   }
 
