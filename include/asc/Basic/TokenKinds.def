@@ -1,0 +1,131 @@
+/// Token kinds for the asc compiler.
+/// Format: TOK(name) / KEYWORD(name, spelling) / PUNCTUATOR(name, spelling)
+
+#ifndef TOK
+#define TOK(X)
+#endif
+#ifndef KEYWORD
+#define KEYWORD(X, S) TOK(kw_##X)
+#endif
+#ifndef PUNCTUATOR
+#define PUNCTUATOR(X, S) TOK(X)
+#endif
+#ifndef LITERAL
+#define LITERAL(X) TOK(X)
+#endif
+
+// Special tokens
+TOK(eof)
+TOK(unknown)
+TOK(identifier)
+TOK(attribute)       // @name
+
+// Literals
+LITERAL(integer_literal)
+LITERAL(float_literal)
+LITERAL(string_literal)
+LITERAL(char_literal)
+LITERAL(template_head)    // `...${
+LITERAL(template_middle)  // }...${
+LITERAL(template_tail)    // }...`
+LITERAL(template_no_sub)  // `...` (no substitutions)
+
+// Doc comments (preserved for doc generation)
+TOK(doc_line_comment)     // ///
+TOK(doc_block_comment)    // /** */
+
+// Keywords
+KEYWORD(const,      "const")
+KEYWORD(let,        "let")
+KEYWORD(function,   "function")
+KEYWORD(fn,         "fn")
+KEYWORD(return,     "return")
+KEYWORD(if,         "if")
+KEYWORD(else,       "else")
+KEYWORD(while,      "while")
+KEYWORD(loop,       "loop")
+KEYWORD(for,        "for")
+KEYWORD(of,         "of")
+KEYWORD(break,      "break")
+KEYWORD(continue,   "continue")
+KEYWORD(match,      "match")
+KEYWORD(struct,     "struct")
+KEYWORD(enum,       "enum")
+KEYWORD(trait,      "trait")
+KEYWORD(impl,       "impl")
+KEYWORD(import,     "import")
+KEYWORD(export,     "export")
+KEYWORD(from,       "from")
+KEYWORD(type,       "type")
+KEYWORD(static,     "static")
+KEYWORD(own,        "own")
+KEYWORD(ref,        "ref")
+KEYWORD(refmut,     "refmut")
+KEYWORD(task,       "task")
+KEYWORD(chan,        "chan")
+KEYWORD(unsafe,     "unsafe")
+KEYWORD(dyn,        "dyn")
+KEYWORD(where,      "where")
+KEYWORD(as,         "as")
+KEYWORD(true,       "true")
+KEYWORD(false,      "false")
+KEYWORD(null,       "null")
+KEYWORD(Self,       "Self")
+KEYWORD(mut,        "mut")
+KEYWORD(extern,     "extern")
+
+// Punctuators (operators and delimiters)
+PUNCTUATOR(l_paren,     "(")
+PUNCTUATOR(r_paren,     ")")
+PUNCTUATOR(l_bracket,   "[")
+PUNCTUATOR(r_bracket,   "]")
+PUNCTUATOR(l_brace,     "{")
+PUNCTUATOR(r_brace,     "}")
+PUNCTUATOR(dot,         ".")
+PUNCTUATOR(dotdot,      "..")
+PUNCTUATOR(dotdotequal, "..=")
+PUNCTUATOR(comma,       ",")
+PUNCTUATOR(colon,       ":")
+PUNCTUATOR(coloncolon,  "::")
+PUNCTUATOR(semicolon,   ";")
+PUNCTUATOR(arrow,       "->")
+PUNCTUATOR(fat_arrow,   "=>")
+PUNCTUATOR(question,    "?")
+PUNCTUATOR(at,          "@")
+PUNCTUATOR(hash,        "#")
+PUNCTUATOR(plus,        "+")
+PUNCTUATOR(minus,       "-")
+PUNCTUATOR(star,        "*")
+PUNCTUATOR(slash,       "/")
+PUNCTUATOR(percent,     "%")
+PUNCTUATOR(amp,         "&")
+PUNCTUATOR(pipe,        "|")
+PUNCTUATOR(caret,       "^")
+PUNCTUATOR(tilde,       "~")
+PUNCTUATOR(exclaim,     "!")
+PUNCTUATOR(less,        "<")
+PUNCTUATOR(greater,     ">")
+PUNCTUATOR(equal,       "=")
+PUNCTUATOR(lessless,    "<<")
+PUNCTUATOR(greatergreater, ">>")
+PUNCTUATOR(lessequal,   "<=")
+PUNCTUATOR(greaterequal,">=")
+PUNCTUATOR(equalequal,  "==")
+PUNCTUATOR(exclaimequal,"!=")
+PUNCTUATOR(ampamp,      "&&")
+PUNCTUATOR(pipepipe,    "||")
+PUNCTUATOR(plusequal,    "+=")
+PUNCTUATOR(minusequal,   "-=")
+PUNCTUATOR(starequal,    "*=")
+PUNCTUATOR(slashequal,   "/=")
+PUNCTUATOR(percentequal, "%=")
+PUNCTUATOR(ampequal,     "&=")
+PUNCTUATOR(pipeequal,    "|=")
+PUNCTUATOR(caretequal,   "^=")
+PUNCTUATOR(lesslessequal,"<<=")
+PUNCTUATOR(greatergreaterequal, ">>=")
+
+#undef TOK
+#undef KEYWORD
+#undef PUNCTUATOR
+#undef LITERAL

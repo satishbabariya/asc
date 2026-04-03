@@ -1,0 +1,40 @@
+add_library(ascCodeGen
+  PanicLowering.cpp
+  OwnershipLowering.cpp
+  ConcurrencyLowering.cpp
+  CodeGen.cpp
+)
+
+target_link_libraries(ascCodeGen
+  PUBLIC
+  ascHIR
+  ascAnalysis
+  ascBasic
+  MLIRIR
+  MLIRLLVMDialect
+  MLIRLLVMCommonConversion
+  MLIRTargetLLVMIRExport
+  MLIRToLLVMIRTranslationRegistration
+  MLIRLLVMToLLVMIRTranslation
+  MLIRBuiltinToLLVMIRTranslation
+  MLIRPass
+  MLIRFuncToLLVM
+  MLIRArithToLLVM
+  MLIRSCFToControlFlow
+  MLIRControlFlowToLLVM
+  LLVMCore
+  LLVMSupport
+  LLVMTarget
+  LLVMCodeGen
+  LLVMMC
+  LLVMPasses
+  LLVMWebAssemblyCodeGen
+  LLVMWebAssemblyDesc
+  LLVMWebAssemblyInfo
+  LLVMX86CodeGen
+  LLVMX86Desc
+  LLVMX86Info
+  LLVMAArch64CodeGen
+  LLVMAArch64Desc
+  LLVMAArch64Info
+)

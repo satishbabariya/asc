@@ -1,0 +1,22 @@
+add_library(ascHIR
+  OwnDialect.cpp
+  OwnOps.cpp
+  OwnTypes.cpp
+  TaskDialect.cpp
+  TaskOps.cpp
+  HIRBuilder.cpp
+)
+
+target_link_libraries(ascHIR
+  PUBLIC
+  ascAST
+  ascSema
+  ascBasic
+  MLIRFuncDialect
+  MLIRArithDialect
+  MLIRMemRefDialect
+  MLIRSCFDialect
+  MLIRControlFlowDialect
+  MLIRIR
+  MLIRSupport
+)
