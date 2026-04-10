@@ -13,6 +13,21 @@
 
 namespace asc {
 
+/// Trace an SSA value through llvm.load ops to find the root alloca/variable.
+static mlir::Value traceToRoot(mlir::Value val) {
+  for (int depth = 0; depth < 4; ++depth) {
+    if (auto *defOp = val.getDefiningOp()) {
+      if (defOp->getName().getStringRef() == "llvm.load" &&
+          defOp->getNumOperands() > 0) {
+        val = defOp->getOperand(0);
+        continue;
+      }
+    }
+    break;
+  }
+  return val;
+}
+
 //===----------------------------------------------------------------------===//
 // Helper: check whether two borrows have overlapping live ranges.
 //===----------------------------------------------------------------------===//
@@ -106,18 +121,7 @@ void AliasCheckPass::collectBorrows(mlir::func::FuncOp func) {
     // Trace the origin through loads to find the root variable (alloca).
     // This ensures borrows of the same variable are grouped together even
     // when the variable is accessed through load→alloca chains.
-    mlir::Value origin = op->getOperand(0);
-    for (int depth = 0; depth < 4; ++depth) {
-      if (auto *defOp = origin.getDefiningOp()) {
-        if (defOp->getName().getStringRef() == "llvm.load" &&
-            defOp->getNumOperands() > 0) {
-          origin = defOp->getOperand(0);
-          continue;
-        }
-      }
-      break;
-    }
-    borrow.originValue = origin;
+    borrow.originValue = traceToRoot(op->getOperand(0));
 
     borrowsByOrigin[borrow.originValue].push_back(borrow);
   });
@@ -168,28 +172,31 @@ void AliasCheckPass::checkBorrowLifetime(mlir::func::FuncOp func) {
       }
 
       if (!lastBorrowUse)
-        continue; // Borrow is never used — no lifetime issue.
+        continue;
 
-      // Check if the origin is dropped before the last borrow use.
-      for (mlir::OpOperand &originUse : origin.getUses()) {
-        mlir::Operation *originOp = originUse.getOwner();
-        llvm::StringRef opName = originOp->getName().getStringRef();
-        if (opName == "own.drop" || opName == "own.move") {
-          if (originOp->getBlock() == lastBorrowUse->getBlock() &&
-              originOp->isBeforeInBlock(lastBorrowUse)) {
-            // Origin is consumed before borrow's last use.
-            // E002: borrow outlives origin
-            mlir::InFlightDiagnostic diag = originOp->emitError()
-                << "[E002] owned value dropped/moved while borrow is still "
-                   "active";
-            diag.attachNote(borrow.borrowOp->getLoc())
-                << "borrow created here";
-            diag.attachNote(lastBorrowUse->getLoc())
-                << "borrow used here after drop/move";
-            signalPassFailure();
-          }
+      // Walk all ops looking for drops/moves of the same origin.
+      func.walk([&](mlir::Operation *op) {
+        llvm::StringRef opName = op->getName().getStringRef();
+        if (opName != "own.drop" && opName != "own.move")
+          return;
+        if (op->getNumOperands() == 0)
+          return;
+
+        mlir::Value droppedRoot = traceToRoot(op->getOperand(0));
+        if (droppedRoot != origin)
+          return;
+
+        if (op->getBlock() == lastBorrowUse->getBlock() &&
+            op->isBeforeInBlock(lastBorrowUse)) {
+          mlir::InFlightDiagnostic diag = op->emitError()
+              << "[E002] owned value dropped/moved while borrow is still active";
+          diag.attachNote(borrow.borrowOp->getLoc())
+              << "borrow created here";
+          diag.attachNote(lastBorrowUse->getLoc())
+              << "borrow used here after drop/move";
+          signalPassFailure();
         }
-      }
+      });
     }
   }
 }
@@ -206,19 +213,16 @@ void AliasCheckPass::checkNoMoveWhileBorrowed(mlir::func::FuncOp func) {
     if (op->getNumOperands() == 0)
       return;
 
-    mlir::Value movedValue = op->getOperand(0);
-    auto it = borrowsByOrigin.find(movedValue);
+    mlir::Value movedRoot = traceToRoot(op->getOperand(0));
+    auto it = borrowsByOrigin.find(movedRoot);
     if (it == borrowsByOrigin.end())
       return;
 
-    // Check if any borrow of this value is still active at this point.
     for (const auto &borrow : it->second) {
       for (mlir::OpOperand &use : borrow.borrowValue.getUses()) {
         mlir::Operation *useOp = use.getOwner();
         if (useOp->getBlock() == op->getBlock() &&
             op->isBeforeInBlock(useOp)) {
-          // The borrow is used after the move/drop.
-          // E003: move/drop while borrowed
           llvm::StringRef verb = (opName == "own.move") ? "move" : "drop";
           auto diag = op->emitError() << "[E003] cannot " << verb
                                       << " value while it is borrowed";

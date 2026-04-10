@@ -129,6 +129,27 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     sym.decl = boxStruct;
     scope->declare("Box", std::move(sym));
   }
+  // --- Arc<T> ---
+  // Atomic reference counted shared ownership.
+  {
+    auto *ptrField = ctx.create<FieldDecl>(
+        "ptr", ctx.getBuiltinType(BuiltinTypeKind::USize), loc);
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    auto *arcStruct = ctx.create<StructDecl>(
+        "Arc", std::vector<GenericParam>{gp},
+        std::vector<FieldDecl *>{ptrField}, loc);
+    arcStruct->addAttribute("@send");
+    arcStruct->addAttribute("@sync");
+    structDecls["Arc"] = arcStruct;
+
+    Symbol sym;
+    sym.name = "Arc";
+    sym.decl = arcStruct;
+    scope->declare("Arc", std::move(sym));
+  }
+
   // --- Core Traits ---
 
   // Drop trait: fn drop(refmut<Self>): void

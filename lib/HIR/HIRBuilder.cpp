@@ -1237,6 +1237,38 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
     return {};
   }
 
+  // Arc::new(value) — allocate with refcount 1.
+  if (calleeName == "Arc_new" || calleeName == "Arc::new") {
+    if (!args.empty()) {
+      auto ptrType = getPtrType();
+      auto i32Type = builder.getIntegerType(32);
+      mlir::Value val = args[0];
+      uint64_t size = getTypeSize(val.getType());
+      if (size == 0) size = 4;
+
+      auto arcNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_arc_new");
+      if (!arcNewFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, i32Type});
+        arcNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_arc_new", fnType);
+      }
+
+      // Store value to temp, pass address.
+      auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(64), static_cast<int64_t>(1));
+      auto valAlloca = builder.create<mlir::LLVM::AllocaOp>(
+          location, ptrType, val.getType(), i64One);
+      builder.create<mlir::LLVM::StoreOp>(location, val, valAlloca);
+      auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+          location, i32Type, static_cast<int64_t>(size));
+
+      return builder.create<mlir::LLVM::CallOp>(
+          location, arcNewFn, mlir::ValueRange{valAlloca, sizeConst}).getResult();
+    }
+    return {};
+  }
+
   // Generic function monomorphization: if callee is generic, emit a
   // specialized version with concrete types substituted for type parameters.
   if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getCallee())) {
@@ -1989,6 +2021,58 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     }
   }
 
+  // Arc::clone() → __asc_arc_clone (atomic refcount increment).
+  if (methodName == "clone" && receiver &&
+      (receiverTypeName == "Arc" || receiverTypeName.starts_with("Arc_")) &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto cloneFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_arc_clone");
+    if (!cloneFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      cloneFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_arc_clone", fnType);
+    }
+    auto call = builder.create<mlir::LLVM::CallOp>(
+        location, cloneFn, mlir::ValueRange{receiver});
+    return call.getResult();
+  }
+
+  // Arc::strong_count() → __asc_arc_strong_count.
+  if (methodName == "strong_count" && receiver &&
+      (receiverTypeName == "Arc" || receiverTypeName.starts_with("Arc_")) &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Type = builder.getIntegerType(32);
+    auto countFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_arc_strong_count");
+    if (!countFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType});
+      countFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_arc_strong_count", fnType);
+    }
+    auto call = builder.create<mlir::LLVM::CallOp>(
+        location, countFn, mlir::ValueRange{receiver});
+    return call.getResult();
+  }
+
+  // Arc::get() / Arc::deref() → __asc_arc_get (returns pointer to inner data).
+  if ((methodName == "get" || methodName == "deref") && receiver &&
+      (receiverTypeName == "Arc" || receiverTypeName.starts_with("Arc_")) &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto getFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_arc_get");
+    if (!getFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      getFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_arc_get", fnType);
+    }
+    auto call = builder.create<mlir::LLVM::CallOp>(
+        location, getFn, mlir::ValueRange{receiver});
+    return call.getResult();
+  }
+
   // Clone: .clone() → copy the value.
   // For pointer-backed types (structs), allocate new memory and memcpy.
   // For scalars, just return the value.
@@ -2385,6 +2469,85 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     builder.create<mlir::LLVM::CallOp>(
         location, clearFn, mlir::ValueRange{receiver});
     return {};
+  }
+
+  // Vec::fold(init, fn) → call __asc_vec_fold(self, init, fn_ptr, elem_size)
+  if (methodName == "fold" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() >= 3) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+
+    auto foldFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_fold");
+    if (!foldFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(
+          i32Ty, {ptrType, i32Ty, ptrType, i32Ty});
+      foldFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_fold", fnType);
+    }
+
+    mlir::Value init = args[1];
+    mlir::Value fnPtr = args[2];
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4));
+
+    auto call = builder.create<mlir::LLVM::CallOp>(
+        location, foldFn, mlir::ValueRange{receiver, init, fnPtr, elemSize});
+    return call.getResult();
+  }
+
+  // Vec::map(fn) → call __asc_vec_map(self, fn_ptr, elem_size)
+  if (methodName == "map" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() >= 2) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+
+    auto mapFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_map");
+    if (!mapFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(
+          ptrType, {ptrType, ptrType, i32Ty});
+      mapFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_map", fnType);
+    }
+
+    mlir::Value fnPtr = args[1];
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4));
+
+    auto call = builder.create<mlir::LLVM::CallOp>(
+        location, mapFn, mlir::ValueRange{receiver, fnPtr, elemSize});
+    return call.getResult();
+  }
+
+  // Vec::filter(fn) → call __asc_vec_filter(self, fn_ptr, elem_size)
+  if (methodName == "filter" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() >= 2) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+
+    auto filterFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_filter");
+    if (!filterFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(
+          ptrType, {ptrType, ptrType, i32Ty});
+      filterFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_filter", fnType);
+    }
+
+    mlir::Value fnPtr = args[1];
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4));
+
+    auto call = builder.create<mlir::LLVM::CallOp>(
+        location, filterFn, mlir::ValueRange{receiver, fnPtr, elemSize});
+    return call.getResult();
   }
 
   // HashMap::remove(key) → __asc_hashmap_remove(self, &key)
