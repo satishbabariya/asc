@@ -69,8 +69,7 @@ void AliasCheckPass::collectBorrows(mlir::func::FuncOp func) {
   func.walk([&](mlir::Operation *op) {
     llvm::StringRef opName = op->getName().getStringRef();
 
-    bool isSharedBorrow = (opName == "own.borrow" ||
-                           opName == "own.borrow_ref");
+    bool isSharedBorrow = (opName == "own.borrow_ref");
     bool isMutBorrow = (opName == "own.borrow_mut");
     if (!isSharedBorrow && !isMutBorrow)
       return;

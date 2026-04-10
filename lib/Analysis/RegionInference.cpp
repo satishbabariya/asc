@@ -94,7 +94,7 @@ void RegionInferencePass::assignInitialRegions(mlir::func::FuncOp func) {
   func.walk([&](mlir::Operation *op) {
     llvm::StringRef opName = op->getName().getStringRef();
 
-    bool isBorrow = opName == "own.borrow" || opName == "own.borrow_mut";
+    bool isBorrow = opName == "own.borrow_ref" || opName == "own.borrow_mut";
     if (!isBorrow)
       return;
 
