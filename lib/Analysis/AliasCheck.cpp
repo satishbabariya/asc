@@ -100,9 +100,24 @@ void AliasCheckPass::collectBorrows(mlir::func::FuncOp func) {
 
     ActiveBorrow borrow;
     borrow.borrowValue = op->getResult(0);
-    borrow.originValue = op->getOperand(0);
     borrow.kind = isMutBorrow ? BorrowKind::Mutable : BorrowKind::Shared;
     borrow.borrowOp = op;
+
+    // Trace the origin through loads to find the root variable (alloca).
+    // This ensures borrows of the same variable are grouped together even
+    // when the variable is accessed through load→alloca chains.
+    mlir::Value origin = op->getOperand(0);
+    for (int depth = 0; depth < 4; ++depth) {
+      if (auto *defOp = origin.getDefiningOp()) {
+        if (defOp->getName().getStringRef() == "llvm.load" &&
+            defOp->getNumOperands() > 0) {
+          origin = defOp->getOperand(0);
+          continue;
+        }
+      }
+      break;
+    }
+    borrow.originValue = origin;
 
     borrowsByOrigin[borrow.originValue].push_back(borrow);
   });

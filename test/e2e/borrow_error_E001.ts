@@ -1,6 +1,6 @@
 // RUN: %asc check %s
-// Tests borrow ops for ref/refmut parameters with &d syntax.
-// TODO: E001 detection needs SSA alias analysis for same-variable tracking.
+// Tests that sequential borrows (non-overlapping) are allowed.
+// read(&d) finishes before write(&d) starts — no conflict.
 
 struct Data { value: i32 }
 
