@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: count elements using for-in loop.
 
 function main(): i32 {

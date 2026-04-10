@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // End-to-end test: traits and generics.
 
 trait Display {

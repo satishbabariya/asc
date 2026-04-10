@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: mutual recursion between two functions.
 
 function is_even(n: i32): bool {

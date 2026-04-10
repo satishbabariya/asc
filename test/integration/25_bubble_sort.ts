@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // test 25: bubble sort using arrays
 function main(): i32 {
   let arr = [5, 3, 1, 4, 2];

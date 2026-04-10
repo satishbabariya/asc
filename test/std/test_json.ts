@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: JSON module — validates parsing compiles.
 function main(): i32 {
   // JSON tests require the json module imports.

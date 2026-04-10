@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test basic ownership transfer.
 // consume() takes an own<Buffer>, so buf is moved.
 

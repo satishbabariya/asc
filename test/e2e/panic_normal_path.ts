@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: panic with source location in message.
 
 function will_not_panic(): i32 {

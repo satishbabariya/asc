@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: size_of! and align_of! macros.
 
 function main(): i32 {

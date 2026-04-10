@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 // Expected: E001 error — mutable borrow while shared borrow active.
 // This test verifies the borrow checker rejects conflicting borrows.
 

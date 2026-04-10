@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: match as expression returning a value.
 
 function classify(x: i32): i32 {

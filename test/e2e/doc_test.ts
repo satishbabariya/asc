@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 /// Adds two numbers together.
 function add(a: i32, b: i32): i32 {
   return a + b;

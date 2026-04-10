@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: combined loops with break, continue, for-range, and arrays.
 
 function matrix_diagonal_sum(): i32 {

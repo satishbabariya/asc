@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test enum and match expressions.
 
 enum Direction {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: HashMap<K,V>.
 function main(): i32 {
   let map: HashMap<i32, i32> = HashMap::new();

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Result<T,E> methods.
 function main(): i32 {
   const ok: Result<i32, i32> = Result::Ok(42);

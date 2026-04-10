@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: if-else as expression.
 
 function abs(x: i32): i32 {

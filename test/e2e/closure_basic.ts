@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: closure capturing outer variable.
 
 function apply(f: (i32) -> i32, x: i32): i32 {

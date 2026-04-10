@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test struct creation and field access.
 
 struct Point {

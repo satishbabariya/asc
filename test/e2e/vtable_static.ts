@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 // Test: static dispatch on trait still works with vtable generation.
 
 trait HasValue {

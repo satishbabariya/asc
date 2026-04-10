@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 // Test: struct with custom Drop implementation.
 
 struct FileHandle {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: array operations — init, modify, verify.
 
 function main(): i32 {

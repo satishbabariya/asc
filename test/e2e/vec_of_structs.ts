@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Vec with @copy struct elements (push/len/indexed access).
 
 @copy

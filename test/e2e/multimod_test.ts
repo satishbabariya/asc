@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: multi-module import from another file.
 
 import { add, mul } from "./import_basic/util";

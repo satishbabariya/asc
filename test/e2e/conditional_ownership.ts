@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: conditional return with struct field access.
 
 struct Item { value: i32 }

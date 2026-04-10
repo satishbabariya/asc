@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: generic function monomorphized at call site.
 
 function identity<T>(x: own<T>): own<T> {

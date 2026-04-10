@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Base64 encoding and decoding.
 function main(): i32 {
   const encoded = base64::encode("Hello, World!".as_bytes());

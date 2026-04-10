@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: manual filter pattern — sum only even numbers.
 
 function main(): i32 {

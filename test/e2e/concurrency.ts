@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // End-to-end test: task and channel concurrency (single-threaded).
 
 function compute(x: i32): i32 {

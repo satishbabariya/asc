@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: enum variant creation and pattern matching.
 
 enum Color { Red, Green, Blue }

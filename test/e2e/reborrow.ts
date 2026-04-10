@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: mutable borrow passed to function multiple times (reborrowing).
 
 struct Counter { value: i32 }

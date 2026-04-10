@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Collection types.
 function main(): i32 {
   // VecDeque basic operations.

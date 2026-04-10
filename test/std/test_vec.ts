@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Vec<T> methods — uses compiler-supported syntax.
 function main(): i32 {
   let v: Vec<i32> = Vec::new();

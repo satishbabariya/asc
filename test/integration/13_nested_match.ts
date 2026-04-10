@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // test 13: multi-field enum payloads
 enum Shape {
   Circle(f64),

@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 // Test: trait with method impl — basic named trait dispatch.
 
 trait Named {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: inclusive range for loop (..=).
 
 function sum_inclusive(n: i32): i32 {

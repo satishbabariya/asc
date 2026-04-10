@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: for-in loop over Vec with iterator protocol.
 
 function main(): i32 {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: channel send/recv with ring buffer runtime.
 
 function main(): i32 {

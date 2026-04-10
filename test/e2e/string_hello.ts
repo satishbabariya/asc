@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test string literal and println macro.
 
 function main(): i32 {

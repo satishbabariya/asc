@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: while loop.
 
 function sum_to(n: i32): i32 {

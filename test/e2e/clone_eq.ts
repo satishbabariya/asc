@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: .clone() and struct == comparison.
 
 struct Point { x: i32, y: i32 }

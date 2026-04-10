@@ -1,3 +1,4 @@
+// RUN: %asc check %s > %t.out 2>&1; grep -q "E004" %t.out
 // Test: expected E004 error — use of value after move.
 
 struct Resource { id: i32 }

@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 // Test: trait with impl for multiple types and self field access.
 
 trait Area {

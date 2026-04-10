@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 function is_prime(n: i32): bool {
   if n <= 1 { return false; }
   let i: i32 = 2;

@@ -1,3 +1,4 @@
+// RUN: %asc check %s > %t.out 2>&1; grep -q "E004" %t.out
 // Expected: E004 error — use of value after move.
 
 struct Buffer {

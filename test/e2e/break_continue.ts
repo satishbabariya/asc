@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: break and continue in while loops.
 
 function find_first_over(limit: i32): i32 {

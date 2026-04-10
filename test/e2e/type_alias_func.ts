@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: type alias with struct and function.
 
 type Int = i32;

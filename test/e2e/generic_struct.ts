@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: generic function with multiple type uses.
 
 function first<T>(a: T, b: T): T {

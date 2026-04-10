@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: tuple creation and field access via t.0 syntax.
 
 function main(): i32 {

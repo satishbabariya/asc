@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: enum match with nested conditionals.
 
 enum Outer {

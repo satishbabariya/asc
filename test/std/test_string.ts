@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: String methods.
 function main(): i32 {
   // Creation.

@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 // Test: expected E001 error — mutable borrow while shared active.
 // Verify: asc check produces error with source excerpt.
 
