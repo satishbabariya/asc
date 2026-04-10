@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 | FileCheck %s || true
+// RUN: %asc check %s
 
 // CHECK-NOT: internal error
 

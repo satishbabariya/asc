@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 || true
+// RUN: %asc check %s
 // Utility module for import test.
 
 export function add(a: i32, b: i32): i32 {
