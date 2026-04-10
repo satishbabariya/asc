@@ -39,6 +39,7 @@ enum class ExprKind {
   Cast,
   Range,
   If,
+  IfLet,
   Match,
   Loop,
   While,
@@ -456,6 +457,29 @@ public:
 
 private:
   Expr *condition;
+  CompoundStmt *thenBlock;
+  Stmt *elseBlock; // nullable
+};
+
+class IfLetExpr : public Expr {
+public:
+  IfLetExpr(Pattern *pattern, Expr *scrutinee, CompoundStmt *thenBlock,
+            Stmt *elseBlock, SourceLocation loc)
+      : Expr(ExprKind::IfLet, loc), pattern(pattern), scrutinee(scrutinee),
+        thenBlock(thenBlock), elseBlock(elseBlock) {}
+
+  Pattern *getPattern() const { return pattern; }
+  Expr *getScrutinee() const { return scrutinee; }
+  CompoundStmt *getThenBlock() const { return thenBlock; }
+  Stmt *getElseBlock() const { return elseBlock; }
+
+  static bool classof(const Expr *e) {
+    return e->getKind() == ExprKind::IfLet;
+  }
+
+private:
+  Pattern *pattern;
+  Expr *scrutinee;
   CompoundStmt *thenBlock;
   Stmt *elseBlock; // nullable
 };

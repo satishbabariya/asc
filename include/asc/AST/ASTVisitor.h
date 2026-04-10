@@ -123,6 +123,8 @@ public:
       return getDerived().visitRangeExpr(static_cast<RangeExpr *>(e));
     case ExprKind::If:
       return getDerived().visitIfExpr(static_cast<IfExpr *>(e));
+    case ExprKind::IfLet:
+      return getDerived().visitIfLetExpr(static_cast<IfLetExpr *>(e));
     case ExprKind::Match:
       return getDerived().visitMatchExpr(static_cast<MatchExpr *>(e));
     case ExprKind::Loop:
@@ -203,6 +205,7 @@ public:
   DEFAULT_VISIT(CastExpr)
   DEFAULT_VISIT(RangeExpr)
   DEFAULT_VISIT(IfExpr)
+  DEFAULT_VISIT(IfLetExpr)
   DEFAULT_VISIT(MatchExpr)
   DEFAULT_VISIT(LoopExpr)
   DEFAULT_VISIT(WhileExpr)

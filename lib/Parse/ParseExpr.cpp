@@ -727,13 +727,32 @@ Expr *Parser::parseIfExpr() {
   SourceLocation loc = tok.getLocation();
   advance(); // consume 'if'
 
+  // Check for `if let Pattern = expr { ... }`
+  if (tok.is(tok::kw_let)) {
+    advance(); // consume 'let'
+    Pattern *pattern = parsePattern();
+    expect(tok::equal);
+    Expr *scrutinee = parseExpr();
+    auto *thenBlock = parseBlock();
+
+    Stmt *elseBlock = nullptr;
+    if (consume(tok::kw_else)) {
+      if (tok.is(tok::kw_if)) {
+        auto *elseIf = parseIfExpr();
+        elseBlock = ctx.create<ExprStmt>(elseIf, elseIf->getLocation());
+      } else {
+        elseBlock = parseBlock();
+      }
+    }
+    return ctx.create<IfLetExpr>(pattern, scrutinee, thenBlock, elseBlock, loc);
+  }
+
   Expr *condition = parseExpr();
   auto *thenBlock = parseBlock();
 
   Stmt *elseBlock = nullptr;
   if (consume(tok::kw_else)) {
     if (tok.is(tok::kw_if)) {
-      // else if — chain
       auto *elseIf = parseIfExpr();
       elseBlock = ctx.create<ExprStmt>(elseIf, elseIf->getLocation());
     } else {

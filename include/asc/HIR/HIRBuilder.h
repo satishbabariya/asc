@@ -81,6 +81,7 @@ public:
   mlir::Value visitUnaryExpr(UnaryExpr *e);
   mlir::Value visitCallExpr(CallExpr *e);
   mlir::Value visitIfExpr(IfExpr *e);
+  mlir::Value visitIfLetExpr(IfLetExpr *e);
   mlir::Value visitBlockExpr(BlockExpr *e);
   mlir::Value visitAssignExpr(AssignExpr *e);
   mlir::Value visitArrayLiteral(ArrayLiteral *e);
