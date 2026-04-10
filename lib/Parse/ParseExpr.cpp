@@ -510,7 +510,16 @@ Expr *Parser::parsePrimaryExpr() {
         return ctx.create<LoopExpr>(body, std::move(label), labelLoc);
       }
       if (tok.is(tok::kw_while)) {
-        advance();
+        advance(); // consume 'while'
+        // Check for while let
+        if (tok.is(tok::kw_let)) {
+          advance(); // consume 'let'
+          Pattern *pattern = parsePattern();
+          expect(tok::equal);
+          Expr *scrutinee = parseExpr();
+          auto *body = parseBlock();
+          return ctx.create<WhileLetExpr>(pattern, scrutinee, body, std::move(label), labelLoc);
+        }
         Expr *condition = parseExpr();
         auto *body = parseBlock();
         return ctx.create<WhileExpr>(condition, body, std::move(label), labelLoc);

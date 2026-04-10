@@ -69,45 +69,37 @@ void __asc_vec_clear(AscVec *v) {
 }
 
 // Fold: reduce vec to single value using callback.
-// callback signature: int (*fn)(int accumulator, int element)
-int __asc_vec_fold(AscVec *v, int init, int (*fn)(int, int), unsigned int elem_size) {
-  if (!v) return init;
-  int acc = init;
+// callback signature: void (*fn)(void *accumulator, const void *element)
+void __asc_vec_fold(AscVec *v, void *acc, void (*fn)(void *, const void *),
+                    unsigned int elem_size) {
+  if (!v) return;
   for (unsigned long i = 0; i < v->len; i++) {
-    int elem;
-    memcpy(&elem, v->ptr + i * elem_size, elem_size < sizeof(int) ? elem_size : sizeof(int));
-    acc = fn(acc, elem);
+    fn(acc, v->ptr + i * elem_size);
   }
-  return acc;
 }
 
 // Map: apply function to each element, return new vec.
-// callback signature: int (*fn)(int element)
-AscVec *__asc_vec_map(AscVec *v, int (*fn)(int), unsigned int elem_size) {
-  AscVec *result = __asc_vec_new(elem_size);
-  if (!v) return result;
+// callback signature: void (*fn)(void *out, const void *element)
+void __asc_vec_map(AscVec *v, void (*fn)(void *, const void *),
+                   unsigned int elem_size, AscVec *result) {
+  if (!v || !result) return;
+  char tmp[64]; // max element size
   for (unsigned long i = 0; i < v->len; i++) {
-    int elem;
-    memcpy(&elem, v->ptr + i * elem_size, elem_size < sizeof(int) ? elem_size : sizeof(int));
-    int mapped = fn(elem);
-    __asc_vec_push(result, &mapped, elem_size);
+    fn(tmp, v->ptr + i * elem_size);
+    __asc_vec_push(result, tmp, elem_size);
   }
-  return result;
 }
 
 // Filter: keep elements where callback returns true.
-// callback signature: int (*fn)(int element)
-AscVec *__asc_vec_filter(AscVec *v, int (*fn)(int), unsigned int elem_size) {
-  AscVec *result = __asc_vec_new(elem_size);
-  if (!v) return result;
+// callback signature: int (*fn)(const void *element)
+void __asc_vec_filter(AscVec *v, int (*fn)(const void *),
+                      unsigned int elem_size, AscVec *result) {
+  if (!v || !result) return;
   for (unsigned long i = 0; i < v->len; i++) {
-    int elem;
-    memcpy(&elem, v->ptr + i * elem_size, elem_size < sizeof(int) ? elem_size : sizeof(int));
-    if (fn(elem)) {
+    if (fn(v->ptr + i * elem_size)) {
       __asc_vec_push(result, v->ptr + i * elem_size, elem_size);
     }
   }
-  return result;
 }
 
 // Free a vec and its data.
