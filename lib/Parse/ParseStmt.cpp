@@ -57,9 +57,11 @@ Stmt *Parser::parseStmt() {
     advance();
     std::string label;
     Expr *value = nullptr;
-    // Label: `break outer;`
-    if (tok.is(tok::identifier) && lexer.peek().is(tok::colon)) {
-      // Actually labels use `outer:` before loops, break just uses `break outer`
+    // Label: `break outer;` — identifier followed by semicolon or brace
+    if (tok.is(tok::identifier) &&
+        lexer.peek().isOneOf(tok::semicolon, tok::r_brace)) {
+      label = tok.getSpelling().str();
+      advance();
     }
     if (!tok.isOneOf(tok::semicolon, tok::r_brace))
       value = parseExpr();
