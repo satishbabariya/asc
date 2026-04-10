@@ -15,7 +15,7 @@ namespace asc {
 
 /// Trace an SSA value through llvm.load ops to find the root alloca/variable.
 static mlir::Value traceToRoot(mlir::Value val) {
-  for (int depth = 0; depth < 4; ++depth) {
+  for (int depth = 0; depth < 16; ++depth) {
     if (auto *defOp = val.getDefiningOp()) {
       if (defOp->getName().getStringRef() == "llvm.load" &&
           defOp->getNumOperands() > 0) {
@@ -186,8 +186,24 @@ void AliasCheckPass::checkBorrowLifetime(mlir::func::FuncOp func) {
         if (droppedRoot != origin)
           return;
 
+        // Same block: drop before last use.
+        bool violation = false;
         if (op->getBlock() == lastBorrowUse->getBlock() &&
             op->isBeforeInBlock(lastBorrowUse)) {
+          violation = true;
+        }
+        // Cross-block: drop in a different block than a borrow use.
+        // If the borrow has uses in blocks other than the drop block,
+        // and the drop exists, flag it conservatively.
+        if (!violation && op->getBlock() != lastBorrowUse->getBlock()) {
+          for (mlir::OpOperand &use : borrow.borrowValue.getUses()) {
+            if (use.getOwner()->getBlock() != op->getBlock()) {
+              violation = true;
+              break;
+            }
+          }
+        }
+        if (violation) {
           mlir::InFlightDiagnostic diag = op->emitError()
               << "[E002] owned value dropped/moved while borrow is still active";
           diag.attachNote(borrow.borrowOp->getLoc())
@@ -221,8 +237,17 @@ void AliasCheckPass::checkNoMoveWhileBorrowed(mlir::func::FuncOp func) {
     for (const auto &borrow : it->second) {
       for (mlir::OpOperand &use : borrow.borrowValue.getUses()) {
         mlir::Operation *useOp = use.getOwner();
+        bool conflict = false;
+        // Same block: move/drop before borrow use.
         if (useOp->getBlock() == op->getBlock() &&
             op->isBeforeInBlock(useOp)) {
+          conflict = true;
+        }
+        // Cross-block: borrow used in a different block than the move/drop.
+        if (!conflict && useOp->getBlock() != op->getBlock()) {
+          conflict = true;
+        }
+        if (conflict) {
           llvm::StringRef verb = (opName == "own.move") ? "move" : "drop";
           auto diag = op->emitError() << "[E003] cannot " << verb
                                       << " value while it is borrowed";
