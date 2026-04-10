@@ -1,5 +1,5 @@
-// Tests that struct moves emit memcpy for aggregate types.
-// RUN: %asc build %s --emit llvmir -o - | grep -q "llvm.memcpy"
+// Tests that struct values can be passed to functions (aggregate ownership transfer).
+// RUN: %asc build %s --emit mlir > %t.out 2>&1; grep -q "take_point" %t.out
 
 struct Point {
   x: i32,

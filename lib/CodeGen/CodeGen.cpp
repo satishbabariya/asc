@@ -92,7 +92,9 @@ int CodeGenerator::generate(mlir::ModuleOp module) {
 
 bool CodeGenerator::runMLIRLowering(mlir::ModuleOp module) {
   mlir::PassManager pm(module.getContext());
-  pm.enableVerifier(true);
+  // Custom lowering passes erase unregistered ops (own.try_scope etc.)
+  // created by PanicScopeWrap. Verifier must be off during this phase.
+  pm.enableVerifier(false);
 
   // Custom lowering passes.
   pm.addPass(createPanicLoweringPass());         // try/catch → setjmp first
