@@ -576,12 +576,38 @@ Type *Sema::checkMatchExpr(MatchExpr *e) {
 Type *Sema::checkForExpr(ForExpr *e) {
   Type *iterableType = checkExpr(e->getIterable());
   pushScope();
-  // Bind loop variable.
+  // Bind loop variable with unwrapped element type.
   Symbol sym;
   sym.name = e->getVarName().str();
-  // DECISION: For range iteration, element type is the range element type.
-  if (iterableType)
-    sym.type = iterableType;
+
+  // Unwrap known iterable types to their element type.
+  Type *elemType = iterableType;
+  if (iterableType) {
+    if (auto *nt = dynamic_cast<NamedType *>(iterableType)) {
+      llvm::StringRef name = nt->getName();
+      // Vec<T> → element is T. Monomorphized struct has fields with concrete type.
+      if (name.starts_with("Vec")) {
+        auto sit = structDecls.find(name);
+        if (sit != structDecls.end()) {
+          for (auto *field : sit->second->getFields()) {
+            if (field->getName() == "ptr" || field->getName() == "data") {
+              elemType = field->getType();
+              break;
+            }
+          }
+        }
+      }
+      // String → element is char.
+      if (name == "String")
+        elemType = ctx.getBuiltinType(BuiltinTypeKind::Char);
+    }
+    // Array type → element type.
+    if (auto *at = dynamic_cast<ArrayType *>(iterableType))
+      elemType = at->getElementType();
+    // Range expressions keep their type (already the element type).
+  }
+
+  sym.type = elemType;
   sym.isMutable = !e->getIsConst();
   if (!e->getVarName().empty())
     currentScope->declare(e->getVarName(), std::move(sym));
