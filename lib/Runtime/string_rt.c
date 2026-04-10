@@ -102,6 +102,11 @@ AscString *__asc_string_concat(AscString *a, AscString *b) {
   return s;
 }
 
+// Clear a string (set len to 0, keep capacity).
+void __asc_string_clear(AscString *s) {
+  if (s) s->len = 0;
+}
+
 // Free a string.
 void __asc_string_free(AscString *s) {
   if (s) {
