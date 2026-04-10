@@ -128,11 +128,15 @@ void __asc_hashmap_remove(AscHashMap *m, const void *key) {
       unsigned long j = (h + 1) % m->capacity;
       while (m->buckets[j * m->entry_size]) {
         unsigned char *next = m->buckets + j * m->entry_size;
-        unsigned char tmp[256]; // Max entry size.
-        memcpy(tmp, next + 1, m->key_size + m->val_size);
+        // Use memmove-safe re-insertion: copy key/val pointers directly
+        // from the entry without a fixed-size intermediate buffer.
+        unsigned int kv_size = m->key_size + m->val_size;
+        unsigned char *tmp = (unsigned char *)malloc(kv_size);
+        memcpy(tmp, next + 1, kv_size);
         next[0] = 0;
         m->count--;
         __asc_hashmap_insert(m, tmp, tmp + m->key_size);
+        free(tmp);
         j = (j + 1) % m->capacity;
       }
       return;

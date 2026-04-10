@@ -2471,6 +2471,10 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return {};
   }
 
+  // TODO: fold/map/filter runtime signatures changed to void*-based callbacks.
+  // The HIRBuilder still generates int-typed function pointers; update when
+  // generic closure codegen is implemented.
+
   // Vec::fold(init, fn) → call __asc_vec_fold(self, init, fn_ptr, elem_size)
   if (methodName == "fold" && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
@@ -2735,7 +2739,7 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
         location, ptrType, val.getType(), i64One);
     builder.create<mlir::LLVM::StoreOp>(location, val, valAlloca);
     auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
-        location, i32Ty, static_cast<int64_t>(4));
+        location, i32Ty, static_cast<int64_t>(getTypeSize(val.getType())));
     builder.create<mlir::LLVM::CallOp>(
         location, sendFn, mlir::ValueRange{receiver, valAlloca, elemSize});
     return {};
@@ -2754,15 +2758,18 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, ptrType, i32Ty});
       recvFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_chan_recv", fnType);
     }
+    // TODO: elemTy should come from the channel's generic type parameter
+    // once Sema propagates it. For now, defaults to i32.
+    auto elemTy = i32Ty;
     auto i64One = builder.create<mlir::LLVM::ConstantOp>(
         location, builder.getIntegerType(64), static_cast<int64_t>(1));
     auto outAlloca = builder.create<mlir::LLVM::AllocaOp>(
-        location, ptrType, i32Ty, i64One);
+        location, ptrType, elemTy, i64One);
     auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
-        location, i32Ty, static_cast<int64_t>(4));
+        location, i32Ty, static_cast<int64_t>(getTypeSize(elemTy)));
     builder.create<mlir::LLVM::CallOp>(
         location, recvFn, mlir::ValueRange{receiver, outAlloca, elemSize});
-    return builder.create<mlir::LLVM::LoadOp>(location, i32Ty, outAlloca);
+    return builder.create<mlir::LLVM::LoadOp>(location, elemTy, outAlloca);
   }
   if (methodName == "join" && receiver) {
     // No-op for single-threaded mode.
