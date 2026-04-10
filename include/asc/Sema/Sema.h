@@ -111,6 +111,7 @@ private:
   Type *checkMatchExpr(MatchExpr *e);
   Type *checkForExpr(ForExpr *e);
   Type *checkWhileExpr(WhileExpr *e);
+  Type *checkWhileLetExpr(WhileLetExpr *e);
   Type *checkLoopExpr(LoopExpr *e);
   Type *checkClosureExpr(ClosureExpr *e);
   Type *checkRangeExpr(RangeExpr *e);

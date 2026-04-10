@@ -43,6 +43,7 @@ enum class ExprKind {
   Match,
   Loop,
   While,
+  WhileLet,
   For,
   Closure,
   Assign,
@@ -544,6 +545,29 @@ public:
 
 private:
   Expr *condition;
+  CompoundStmt *body;
+  std::string label;
+};
+
+class WhileLetExpr : public Expr {
+public:
+  WhileLetExpr(Pattern *pattern, Expr *scrutinee, CompoundStmt *body,
+               std::string label, SourceLocation loc)
+      : Expr(ExprKind::WhileLet, loc), pattern(pattern), scrutinee(scrutinee),
+        body(body), label(std::move(label)) {}
+
+  Pattern *getPattern() const { return pattern; }
+  Expr *getScrutinee() const { return scrutinee; }
+  CompoundStmt *getBody() const { return body; }
+  llvm::StringRef getLabel() const { return label; }
+
+  static bool classof(const Expr *e) {
+    return e->getKind() == ExprKind::WhileLet;
+  }
+
+private:
+  Pattern *pattern;
+  Expr *scrutinee;
   CompoundStmt *body;
   std::string label;
 };

@@ -3279,6 +3279,18 @@ mlir::Value HIRBuilder::visitWhileExpr(WhileExpr *e) {
   return {};
 }
 
+mlir::Value HIRBuilder::visitWhileLetExpr(WhileLetExpr *e) {
+  // Basic support: evaluate scrutinee, execute body once.
+  // Full pattern-match loop desugar is a future enhancement.
+  if (e->getScrutinee())
+    visitExpr(e->getScrutinee());
+  if (e->getBody()) {
+    for (auto *stmt : e->getBody()->getStmts())
+      visitStmt(stmt);
+  }
+  return {};
+}
+
 mlir::Value HIRBuilder::visitForExpr(ForExpr *e) {
   auto location = loc(e->getLocation());
 

@@ -95,6 +95,7 @@ public:
   mlir::Value visitMatchExpr(MatchExpr *e);
   mlir::Value visitLoopExpr(LoopExpr *e);
   mlir::Value visitWhileExpr(WhileExpr *e);
+  mlir::Value visitWhileLetExpr(WhileLetExpr *e);
   mlir::Value visitForExpr(ForExpr *e);
   mlir::Value visitRangeExpr(RangeExpr *e);
   mlir::Value visitCharLiteral(CharLiteral *e);
