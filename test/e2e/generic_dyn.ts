@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 || true
+// RUN: %asc check %s
 // Test: dyn Trait dynamic dispatch with different impl types.
 
 trait Transform {

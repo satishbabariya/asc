@@ -357,6 +357,11 @@ mlir::Value HIRBuilder::visitFunctionDecl(FunctionDecl *d) {
 
   auto funcOp =
       mlir::func::FuncOp::create(location, d->getName(), funcType);
+
+  // Extern declarations (no body) must be private per MLIR func.func verifier.
+  if (!d->getBody())
+    funcOp.setPrivate();
+
   module.push_back(funcOp);
 
   if (d->getBody())
