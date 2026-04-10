@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 || true
+// RUN: %asc check %s
 // Comprehensive test exercising all implemented features.
 
 // 1. Struct with f64 fields, passed by value

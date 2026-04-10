@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 || true
+// RUN: %asc check %s
 trait Measurable { fn measure(ref<Self>): i32; }
 struct Line { length: i32 }
 struct Circle { radius: i32 }

@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 || true
+// RUN: %asc check %s
 // test 27: state machine with loop construct
 function run_loop(): i32 {
   let x: i32 = 0;

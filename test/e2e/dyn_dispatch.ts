@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 || true
+// RUN: %asc check %s
 // Test: dynamic trait dispatch via dyn Trait fat pointer.
 
 trait Speak {
