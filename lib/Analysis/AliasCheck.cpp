@@ -26,11 +26,32 @@ static bool borrowsOverlap(const ActiveBorrow &a, const ActiveBorrow &b) {
   mlir::Block *blockB = b.borrowOp->getBlock();
 
   if (blockA != blockB) {
-    // Cross-block borrows: conservatively assume they may overlap
-    // unless one dominates and completes before the other starts.
-    // For now, assume overlap — a proper implementation would consult
-    // the region inference results.
-    return true;
+    // Cross-block borrows: check if either borrow's value has uses
+    // in or after the other borrow's block.
+    mlir::Value valA = a.borrowValue;
+    mlir::Value valB = b.borrowValue;
+
+    // Check if borrow A is used after borrow B's definition.
+    bool aUsedAfterB = false;
+    for (mlir::OpOperand &use : valA.getUses()) {
+      mlir::Operation *useOp = use.getOwner();
+      if (useOp->getBlock() == blockB && b.borrowOp->isBeforeInBlock(useOp)) {
+        aUsedAfterB = true;
+        break;
+      }
+    }
+
+    // Check if borrow B is used after borrow A's definition.
+    bool bUsedAfterA = false;
+    for (mlir::OpOperand &use : valB.getUses()) {
+      mlir::Operation *useOp = use.getOwner();
+      if (useOp->getBlock() == blockA && a.borrowOp->isBeforeInBlock(useOp)) {
+        bUsedAfterA = true;
+        break;
+      }
+    }
+
+    return aUsedAfterB || bUsedAfterA;
   }
 
   // Same block: check if the first borrow's value is still used after
@@ -69,8 +90,7 @@ void AliasCheckPass::collectBorrows(mlir::func::FuncOp func) {
   func.walk([&](mlir::Operation *op) {
     llvm::StringRef opName = op->getName().getStringRef();
 
-    bool isSharedBorrow = (opName == "own.borrow" ||
-                           opName == "own.borrow_ref");
+    bool isSharedBorrow = (opName == "own.borrow_ref");
     bool isMutBorrow = (opName == "own.borrow_mut");
     if (!isSharedBorrow && !isMutBorrow)
       return;

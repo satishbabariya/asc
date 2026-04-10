@@ -544,9 +544,8 @@ ExitCode Driver::lowerToHIR() {
 
 ExitCode Driver::runAnalysis() {
   mlir::PassManager pm(&mlirState->context);
-  // DECISION: Disable MLIR verification between passes to allow
-  // cf.cond_br + func.return pattern (valid but strict verifier rejects).
-  pm.enableVerifier(false);
+  // Enable MLIR verification between passes to catch IR issues early.
+  pm.enableVerifier(true);
 
   // 5-pass borrow checker.
   pm.addNestedPass<mlir::func::FuncOp>(createLivenessAnalysisPass());
@@ -563,6 +562,9 @@ ExitCode Driver::runAnalysis() {
 
 ExitCode Driver::runTransforms() {
   mlir::PassManager pm(&mlirState->context);
+  // PanicScopeWrap creates unregistered ops (own.try_scope, own.catch_scope)
+  // via OperationState strings. These are erased by OwnershipLowering.
+  // Verifier must be off here until these ops are properly registered.
   pm.enableVerifier(false);
 
   pm.addNestedPass<mlir::func::FuncOp>(createDropInsertionPass());

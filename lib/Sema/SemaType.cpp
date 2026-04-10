@@ -52,12 +52,39 @@ bool Sema::isCompatible(Type *lhs, Type *rhs) {
     if (auto *rb = dynamic_cast<BuiltinType *>(rhs)) {
       if (lb->getBuiltinKind() == rb->getBuiltinKind())
         return true;
-      // Integer widening: i32 → i64, i32 → usize, etc.
-      if (lb->isInteger() && rb->isInteger())
-        return true;
       // Float widening: f32 → f64.
       if (lb->isFloat() && rb->isFloat())
         return true;
+      // Integer compatibility: restricted widening rules.
+      if (lb->isInteger() && rb->isInteger()) {
+        // Same signedness: allow widening (smaller → larger).
+        if (lb->isSigned() == rb->isSigned())
+          return true;
+        // usize ↔ u64 and isize ↔ i64 (platform equivalence).
+        auto lk = lb->getBuiltinKind();
+        auto rk = rb->getBuiltinKind();
+        if ((lk == BuiltinTypeKind::USize && rk == BuiltinTypeKind::U64) ||
+            (lk == BuiltinTypeKind::U64 && rk == BuiltinTypeKind::USize) ||
+            (lk == BuiltinTypeKind::ISize && rk == BuiltinTypeKind::I64) ||
+            (lk == BuiltinTypeKind::I64 && rk == BuiltinTypeKind::ISize))
+          return true;
+        // Same bit-width signed ↔ unsigned (practical interop).
+        auto bitWidth = [](BuiltinTypeKind k) -> int {
+          switch (k) {
+          case BuiltinTypeKind::I8: case BuiltinTypeKind::U8: return 8;
+          case BuiltinTypeKind::I16: case BuiltinTypeKind::U16: return 16;
+          case BuiltinTypeKind::I32: case BuiltinTypeKind::U32: return 32;
+          case BuiltinTypeKind::I64: case BuiltinTypeKind::U64: return 64;
+          case BuiltinTypeKind::I128: case BuiltinTypeKind::U128: return 128;
+          case BuiltinTypeKind::USize: case BuiltinTypeKind::ISize: return 64;
+          default: return 0;
+          }
+        };
+        if (bitWidth(lk) == bitWidth(rk))
+          return true;
+        // All other integer conversions: reject (require explicit `as` cast).
+        return false;
+      }
     }
   }
 

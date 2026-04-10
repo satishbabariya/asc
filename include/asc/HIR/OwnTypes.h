@@ -8,31 +8,52 @@
 namespace asc {
 namespace own {
 
-// DECISION: Use simple MLIR type aliases instead of custom TypeStorage.
-// This avoids LLVM version-specific TypeBase<> API incompatibilities.
-// The ownership semantics (Send, Sync) are tracked via attributes
-// on operations rather than embedded in the type.
+namespace detail {
+struct OwnValTypeStorage : public mlir::TypeStorage {
+  using KeyTy = std::tuple<mlir::Type, bool, bool>;
+
+  OwnValTypeStorage(mlir::Type innerType, bool isSend, bool isSync)
+      : innerType(innerType), sendFlag(isSend), syncFlag(isSync) {}
+
+  bool operator==(const KeyTy &key) const {
+    return std::get<0>(key) == innerType &&
+           std::get<1>(key) == sendFlag &&
+           std::get<2>(key) == syncFlag;
+  }
+
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    return llvm::hash_combine(std::get<0>(key), std::get<1>(key),
+                              std::get<2>(key));
+  }
+
+  static OwnValTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                       const KeyTy &key) {
+    return new (allocator.allocate<OwnValTypeStorage>())
+        OwnValTypeStorage(std::get<0>(key), std::get<1>(key),
+                          std::get<2>(key));
+  }
+
+  mlir::Type innerType;
+  bool sendFlag;
+  bool syncFlag;
+};
+} // namespace detail
 
 /// OwnValType: !own.val<T> — an owned value.
-/// Implemented as a simple wrapper using MLIR's type mechanism.
 class OwnValType : public mlir::Type::TypeBase<OwnValType, mlir::Type,
-                                                mlir::TypeStorage> {
+                                                detail::OwnValTypeStorage> {
 public:
   using Base::Base;
   static constexpr llvm::StringLiteral name = "own.val";
 
-  static OwnValType get(mlir::MLIRContext *ctx) {
-    return Base::get(ctx);
-  }
-  // Overloaded convenience: ignore inner type/send/sync (carried via attributes).
-  static OwnValType get(mlir::MLIRContext *ctx, mlir::Type /*innerType*/,
-                        bool /*send*/ = true, bool /*sync*/ = false) {
-    return Base::get(ctx);
+  static OwnValType get(mlir::MLIRContext *ctx, mlir::Type innerType = {},
+                        bool isSend = true, bool isSync = false) {
+    return Base::get(ctx, innerType, isSend, isSync);
   }
 
-  mlir::Type getInnerType() const { return mlir::Type(); }
-  bool isSend() const { return true; }
-  bool isSync() const { return false; }
+  mlir::Type getInnerType() const { return getImpl()->innerType; }
+  bool isSend() const { return getImpl()->sendFlag; }
+  bool isSync() const { return getImpl()->syncFlag; }
 };
 
 /// BorrowType: !own.borrow<T> — a shared borrow.

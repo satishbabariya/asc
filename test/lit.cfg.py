@@ -7,4 +7,5 @@ config.suffixes = ['.ts']
 config.test_source_root = os.path.dirname(__file__)
 
 # Find the asc binary
-config.substitutions.append(('%asc', os.path.join(config.test_exec_root, '..', 'tools', 'asc', 'asc')))
+exec_root = config.test_exec_root or os.path.join(os.path.dirname(__file__), '..', 'build')
+config.substitutions.append(('%asc', os.path.join(exec_root, 'tools', 'asc', 'asc')))

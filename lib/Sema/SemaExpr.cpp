@@ -1,4 +1,5 @@
 #include "asc/Sema/Sema.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 
 namespace asc {
@@ -570,18 +571,93 @@ Type *Sema::checkMatchExpr(MatchExpr *e) {
     }
     popScope();
   }
+  // Basic match exhaustiveness check for enum types.
+  if (scrutType) {
+    if (auto *nt = dynamic_cast<NamedType *>(scrutType)) {
+      auto eit = enumDecls.find(nt->getName());
+      if (eit != enumDecls.end()) {
+        // Collect matched variant names.
+        llvm::StringSet<> matchedVariants;
+        bool hasWildcard = false;
+        for (const auto &arm : e->getArms()) {
+          if (!arm.pattern)
+            continue;
+          if (dynamic_cast<WildcardPattern *>(arm.pattern)) {
+            hasWildcard = true;
+            break;
+          }
+          if (auto *ep = dynamic_cast<EnumPattern *>(arm.pattern)) {
+            const auto &path = ep->getPath();
+            if (!path.empty())
+              matchedVariants.insert(path.back());
+          }
+          if (auto *ip = dynamic_cast<IdentPattern *>(arm.pattern)) {
+            // A bare identifier pattern acts as a wildcard binding.
+            hasWildcard = true;
+            break;
+          }
+        }
+
+        if (!hasWildcard) {
+          // Check that all variants are covered.
+          llvm::SmallVector<llvm::StringRef, 4> missing;
+          for (auto *v : eit->second->getVariants()) {
+            if (!matchedVariants.contains(v->getName()))
+              missing.push_back(v->getName());
+          }
+          if (!missing.empty()) {
+            std::string missingStr;
+            for (unsigned i = 0; i < missing.size(); ++i) {
+              if (i > 0) missingStr += ", ";
+              missingStr += missing[i].str();
+            }
+            diags.emitWarning(e->getLocation(),
+                DiagID::WarnNonExhaustiveMatch,
+                "non-exhaustive match: missing variants: " + missingStr);
+          }
+        }
+      }
+    }
+  }
+
   return armType;
 }
 
 Type *Sema::checkForExpr(ForExpr *e) {
   Type *iterableType = checkExpr(e->getIterable());
   pushScope();
-  // Bind loop variable.
+  // Bind loop variable with unwrapped element type.
   Symbol sym;
   sym.name = e->getVarName().str();
-  // DECISION: For range iteration, element type is the range element type.
-  if (iterableType)
-    sym.type = iterableType;
+
+  // Unwrap known iterable types to their element type.
+  Type *elemType = iterableType;
+  if (iterableType) {
+    if (auto *nt = dynamic_cast<NamedType *>(iterableType)) {
+      llvm::StringRef name = nt->getName();
+      // Vec<T> → element is T. Monomorphized struct has fields with concrete type.
+      if (name.starts_with("Vec")) {
+        auto sit = structDecls.find(name);
+        if (sit != structDecls.end()) {
+          for (auto *field : sit->second->getFields()) {
+            if (field->getName() == "ptr" || field->getName() == "data") {
+              elemType = field->getType();
+              break;
+            }
+          }
+        }
+      }
+      // String → element is char.
+      if (name == "String")
+        elemType = ctx.getBuiltinType(BuiltinTypeKind::Char);
+    }
+    // Array type → element type.
+    if (auto *at = dynamic_cast<ArrayType *>(iterableType))
+      elemType = at->getElementType();
+    // Range expressions keep their type (already the element type).
+  }
+
+  sym.type = elemType;
   sym.isMutable = !e->getIsConst();
   if (!e->getVarName().empty())
     currentScope->declare(e->getVarName(), std::move(sym));
@@ -826,8 +902,60 @@ Type *Sema::checkMacroCallExpr(MacroCallExpr *e) {
 
 Type *Sema::checkTryExpr(TryExpr *e) {
   Type *innerType = checkExpr(e->getOperand());
-  // DECISION: ? operator on Result<T,E> produces T; on Option<T> produces T.
-  // For now, pass through the inner type since we lack generic resolution.
+  if (!innerType)
+    return nullptr;
+
+  // Check if the operand type is Result<T,E> or Option<T>.
+  if (auto *nt = dynamic_cast<NamedType *>(innerType)) {
+    llvm::StringRef name = nt->getName();
+
+    // Result<T,E> → unwrap to T.
+    // Monomorphized names look like "Result_i32_String".
+    if (name.starts_with("Result")) {
+      // The function must return Result to propagate the error.
+      if (currentReturnType) {
+        if (auto *retNt = dynamic_cast<NamedType *>(currentReturnType)) {
+          if (!retNt->getName().starts_with("Result")) {
+            diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
+                            "? operator requires enclosing function to return Result");
+          }
+        }
+      }
+      // Look up the Ok variant's type from the enum declaration.
+      auto eit = enumDecls.find(name);
+      if (eit != enumDecls.end()) {
+        for (auto *v : eit->second->getVariants()) {
+          if (v->getName() == "Ok" && !v->getTupleTypes().empty())
+            return v->getTupleTypes()[0];
+        }
+      }
+      return innerType; // Fallback if we can't resolve the Ok type.
+    }
+
+    // Option<T> → unwrap to T.
+    if (name.starts_with("Option")) {
+      if (currentReturnType) {
+        if (auto *retNt = dynamic_cast<NamedType *>(currentReturnType)) {
+          if (!retNt->getName().starts_with("Option")) {
+            diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
+                            "? operator requires enclosing function to return Option");
+          }
+        }
+      }
+      auto eit = enumDecls.find(name);
+      if (eit != enumDecls.end()) {
+        for (auto *v : eit->second->getVariants()) {
+          if (v->getName() == "Some" && !v->getTupleTypes().empty())
+            return v->getTupleTypes()[0];
+        }
+      }
+      return innerType;
+    }
+  }
+
+  // Neither Result nor Option.
+  diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
+                  "? operator requires Result<T,E> or Option<T> operand");
   return innerType;
 }
 

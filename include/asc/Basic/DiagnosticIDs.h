@@ -28,6 +28,7 @@ enum class DiagID : unsigned {
   // Warnings
   WarnConditionalMoveDropFlag = 101,  // W001
   WarnLargeCopyType = 102,            // W002
+  WarnNonExhaustiveMatch = 103,       // W003
 
   // General compiler diagnostics
   ErrUnexpectedToken = 200,
@@ -85,6 +86,7 @@ inline const char *getDiagCode(DiagID id) {
   case DiagID::ErrDoublePanic: return "E010";
   case DiagID::WarnConditionalMoveDropFlag: return "W001";
   case DiagID::WarnLargeCopyType: return "W002";
+  case DiagID::WarnNonExhaustiveMatch: return "W003";
   default: return nullptr;
   }
 }

@@ -5,6 +5,7 @@
 // destructors run on unwind.
 
 #include "asc/Analysis/PanicScopeWrap.h"
+#include "asc/HIR/OwnTypes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
@@ -21,9 +22,7 @@ namespace asc {
 //===----------------------------------------------------------------------===//
 
 static bool isOwnedType(mlir::Type type) {
-  // Check for own.val custom dialect type.
-  llvm::StringRef typeName = type.getAbstractType().getName();
-  if (typeName.contains("own.val"))
+  if (mlir::isa<asc::own::OwnValType>(type))
     return true;
   // Also detect LLVM pointer types — struct/heap allocations are owned.
   if (mlir::isa<mlir::LLVM::LLVMPointerType>(type))

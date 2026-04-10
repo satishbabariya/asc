@@ -83,9 +83,50 @@ struct OwnershipLoweringPass
         if (op->getNumResults() > 0)
           op->getResult(0).replaceAllUsesWith(alloca.getResult());
         op->erase();
-      } else if (name == "own.move" || name == "own.copy" ||
+      } else if (name == "own.move") {
+        if (op->getNumOperands() > 0 && op->getNumResults() > 0) {
+          auto operand = op->getOperand(0);
+          // Check if the operand comes from an alloca of a struct type.
+          // If so, memcpy the data to a new allocation.
+          bool isAggregate = false;
+          uint64_t structSize = 0;
+          if (auto *defOp = operand.getDefiningOp()) {
+            if (auto allocaOp = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp)) {
+              if (auto elemType = allocaOp.getElemType()) {
+                if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(elemType)) {
+                  isAggregate = true;
+                  // Compute actual struct size by summing field sizes.
+                  for (mlir::Type fieldTy : structTy.getBody()) {
+                    if (fieldTy.isIntOrIndexOrFloat())
+                      structSize += (fieldTy.getIntOrFloatBitWidth() + 7) / 8;
+                    else
+                      structSize += 8; // Pointer-sized default.
+                  }
+                  if (structSize == 0) structSize = 8;
+                }
+              }
+            }
+          }
+          if (isAggregate && structSize > 0) {
+            // Allocate destination and memcpy.
+            auto i8Ty = mlir::IntegerType::get(ctx, 8);
+            auto arrayTy = mlir::LLVM::LLVMArrayType::get(i8Ty, structSize);
+            auto one = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)1);
+            auto dst = builder.create<mlir::LLVM::AllocaOp>(loc, ptrType, arrayTy, one);
+            auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)structSize);
+            auto falseCst = builder.create<mlir::LLVM::ConstantOp>(
+                loc, mlir::IntegerType::get(ctx, 1), (int64_t)0);
+            builder.create<mlir::LLVM::MemcpyOp>(loc, dst, operand, sizeVal, falseCst);
+            op->getResult(0).replaceAllUsesWith(dst.getResult());
+          } else {
+            // Scalar/pointer: SSA forward.
+            op->getResult(0).replaceAllUsesWith(operand);
+          }
+        }
+        op->erase();
+      } else if (name == "own.copy" ||
                  name == "own.borrow_ref" || name == "own.borrow_mut") {
-        // Forward SSA value.
+        // Forward SSA value (borrows and copies don't transfer ownership of data).
         if (op->getNumOperands() > 0 && op->getNumResults() > 0)
           op->getResult(0).replaceAllUsesWith(op->getOperand(0));
         op->erase();

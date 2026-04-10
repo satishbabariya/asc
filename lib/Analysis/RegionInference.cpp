@@ -8,7 +8,9 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 namespace asc {
 
@@ -94,7 +96,7 @@ void RegionInferencePass::assignInitialRegions(mlir::func::FuncOp func) {
   func.walk([&](mlir::Operation *op) {
     llvm::StringRef opName = op->getName().getStringRef();
 
-    bool isBorrow = opName == "own.borrow" || opName == "own.borrow_mut";
+    bool isBorrow = opName == "own.borrow_ref" || opName == "own.borrow_mut";
     if (!isBorrow)
       return;
 
@@ -173,25 +175,58 @@ void RegionInferencePass::extendRegionsToUses(mlir::func::FuncOp func) {
         region.points.push_back(usePoint);
 
       // If the use is in a different block than the definition, extend
-      // the region to cover all intermediate blocks on the CFG path.
+      // the region to cover all blocks reachable on any CFG path from def to use.
       if (!region.points.empty()) {
         unsigned defBlockIdx = region.points[0].blockIndex;
         if (useBlockIdx != defBlockIdx) {
-          // Add entry/exit points for all blocks between def and use.
-          // Walk forward through blocks (simplified — assumes linear CFG).
-          unsigned lo = std::min(defBlockIdx, useBlockIdx);
-          unsigned hi = std::max(defBlockIdx, useBlockIdx);
-          for (unsigned b = lo; b <= hi; ++b) {
-            CFGPoint entry{b, 0};
-            bool found = false;
-            for (const auto &p : region.points) {
-              if (p.blockIndex == b) {
-                found = true;
-                break;
+          // Find the def block pointer from the index.
+          mlir::Block *defBlock = nullptr;
+          for (auto &[blk, idx] : blockIndex) {
+            if (idx == defBlockIdx) {
+              defBlock = blk;
+              break;
+            }
+          }
+          if (defBlock) {
+            // Forward BFS from def block.
+            llvm::SmallVector<mlir::Block *, 16> fwdWorklist;
+            llvm::DenseSet<mlir::Block *> fwdReachable;
+            fwdWorklist.push_back(defBlock);
+            fwdReachable.insert(defBlock);
+            while (!fwdWorklist.empty()) {
+              mlir::Block *cur = fwdWorklist.pop_back_val();
+              for (mlir::Block *succ : cur->getSuccessors()) {
+                if (fwdReachable.insert(succ).second)
+                  fwdWorklist.push_back(succ);
               }
             }
-            if (!found)
-              region.points.push_back(entry);
+            // Backward BFS from use block (traverse predecessors).
+            llvm::SmallVector<mlir::Block *, 16> bwdWorklist;
+            llvm::DenseSet<mlir::Block *> bwdReachable;
+            bwdWorklist.push_back(useBlock);
+            bwdReachable.insert(useBlock);
+            while (!bwdWorklist.empty()) {
+              mlir::Block *cur = bwdWorklist.pop_back_val();
+              for (mlir::Block *pred : cur->getPredecessors()) {
+                if (bwdReachable.insert(pred).second)
+                  bwdWorklist.push_back(pred);
+              }
+            }
+            // Intersect: only blocks on actual paths from def to use.
+            for (mlir::Block *blk : fwdReachable) {
+              if (!bwdReachable.contains(blk))
+                continue;
+              unsigned blkIdx = blockIndex[blk];
+              bool found = false;
+              for (const auto &p : region.points) {
+                if (p.blockIndex == blkIdx) {
+                  found = true;
+                  break;
+                }
+              }
+              if (!found)
+                region.points.push_back(CFGPoint{blkIdx, 0});
+            }
           }
         }
       }
@@ -224,24 +259,21 @@ void RegionInferencePass::propagateThroughPhis(mlir::func::FuncOp func) {
           if (terminator->getSuccessor(succIdx) != &block)
             continue;
 
-          // Get successor operands for this edge.
-          // DECISION: Skip successor operand analysis — use simpler
-          // block argument propagation instead of getSuccessorOperands
-          // which was removed in MLIR 18.
-          (void)succIdx;
-          // DECISION: Successor operand propagation skipped for MLIR 18.
-          // Region merging through phi nodes deferred.
-          if (false) {
-            mlir::Value incomingVal;
-            auto inIt = result.valueToRegion.find(incomingVal);
+          // Use BranchOpInterface to get successor operands.
+          if (auto branchOp = mlir::dyn_cast<mlir::BranchOpInterface>(terminator)) {
+            auto succOperands = branchOp.getSuccessorOperands(succIdx);
+            if (argIdx < succOperands.size()) {
+              mlir::Value incomingVal = succOperands[argIdx];
+              auto inIt = result.valueToRegion.find(incomingVal);
 
-            if (argIt != result.valueToRegion.end() &&
-                inIt != result.valueToRegion.end()) {
-              result.unionFind.merge(argIt->second, inIt->second);
-            } else if (inIt != result.valueToRegion.end() &&
-                       argIt == result.valueToRegion.end()) {
-              result.valueToRegion[blockArg] = inIt->second;
-              argIt = result.valueToRegion.find(blockArg);
+              if (argIt != result.valueToRegion.end() &&
+                  inIt != result.valueToRegion.end()) {
+                result.unionFind.merge(argIt->second, inIt->second);
+              } else if (inIt != result.valueToRegion.end() &&
+                         argIt == result.valueToRegion.end()) {
+                result.valueToRegion[blockArg] = inIt->second;
+                argIt = result.valueToRegion.find(blockArg);
+              }
             }
           }
         }
