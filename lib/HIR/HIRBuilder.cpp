@@ -1463,6 +1463,83 @@ mlir::Value HIRBuilder::visitIfExpr(IfExpr *e) {
   return {};
 }
 
+mlir::Value HIRBuilder::visitIfLetExpr(IfLetExpr *e) {
+  auto location = loc(e->getLocation());
+
+  // Evaluate scrutinee (needed for side effects and future pattern matching).
+  mlir::Value scrutinee = visitExpr(e->getScrutinee());
+
+  // For now, always take the then-branch (full pattern-match is a future
+  // enhancement). Create a constant-true condition.
+  mlir::Value cond = builder.create<mlir::arith::ConstantIntOp>(
+      location, 1, builder.getI1Type());
+
+  bool hasElse = e->getElseBlock() != nullptr;
+
+  auto *currentBlock = builder.getBlock();
+  auto *parentRegion = currentBlock->getParent();
+
+  auto *thenBlock = new mlir::Block();
+  auto *mergeBlock = new mlir::Block();
+  mlir::Block *elseBlock = hasElse ? new mlir::Block() : nullptr;
+
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(currentBlock), thenBlock);
+  if (elseBlock)
+    parentRegion->getBlocks().insertAfter(
+        mlir::Region::iterator(thenBlock), elseBlock);
+  parentRegion->getBlocks().insertAfter(
+      mlir::Region::iterator(elseBlock ? elseBlock : thenBlock), mergeBlock);
+
+  builder.create<mlir::cf::CondBranchOp>(
+      location, cond, thenBlock, mlir::ValueRange{},
+      hasElse ? elseBlock : mergeBlock, mlir::ValueRange{});
+
+  // Then block.
+  builder.setInsertionPointToStart(thenBlock);
+  pushScope();
+  // Bind pattern variables to the scrutinee value so they are visible
+  // inside the then-block.  Full destructuring is a future enhancement.
+  if (e->getPattern() && scrutinee) {
+    if (auto *ep = dynamic_cast<EnumPattern *>(e->getPattern())) {
+      for (auto *arg : ep->getArgs()) {
+        if (auto *ip = dynamic_cast<IdentPattern *>(arg))
+          declare(ip->getName(), scrutinee);
+      }
+    }
+    if (auto *ip = dynamic_cast<IdentPattern *>(e->getPattern()))
+      declare(ip->getName(), scrutinee);
+  }
+  if (e->getThenBlock())
+    visitCompoundStmt(e->getThenBlock());
+  popScope();
+  auto *thenEnd = builder.getBlock();
+  if (thenEnd->empty() ||
+      !thenEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
+    builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+
+  // Else block.
+  if (hasElse) {
+    builder.setInsertionPointToStart(elseBlock);
+    pushScope();
+    visitStmt(e->getElseBlock());
+    popScope();
+    auto *elseEnd = builder.getBlock();
+    if (elseEnd->empty() ||
+        !elseEnd->back().hasTrait<mlir::OpTrait::IsTerminator>())
+      builder.create<mlir::cf::BranchOp>(location, mergeBlock);
+  }
+
+  if (mergeBlock->hasNoPredecessors()) {
+    mergeBlock->erase();
+    if (currentFunction && !currentFunction.getBody().empty())
+      builder.setInsertionPointToEnd(&currentFunction.getBody().back());
+  } else {
+    builder.setInsertionPointToStart(mergeBlock);
+  }
+  return {};
+}
+
 mlir::Value HIRBuilder::visitBlockExpr(BlockExpr *e) {
   if (e->getBlock())
     return visitCompoundStmt(e->getBlock());
@@ -3199,6 +3276,18 @@ mlir::Value HIRBuilder::visitWhileExpr(WhileExpr *e) {
 
   // Continue in exit block.
   builder.setInsertionPointToStart(exitBlock);
+  return {};
+}
+
+mlir::Value HIRBuilder::visitWhileLetExpr(WhileLetExpr *e) {
+  // Basic support: evaluate scrutinee, execute body once.
+  // Full pattern-match loop desugar is a future enhancement.
+  if (e->getScrutinee())
+    visitExpr(e->getScrutinee());
+  if (e->getBody()) {
+    for (auto *stmt : e->getBody()->getStmts())
+      visitStmt(stmt);
+  }
   return {};
 }
 

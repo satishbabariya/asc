@@ -496,6 +496,45 @@ Expr *Parser::parsePrimaryExpr() {
     return value ? value : ctx.create<NullLiteral>(loc);
   }
 
+  // Labelled loop: `label: loop/while/for { ... }`
+  if (tok.is(tok::identifier)) {
+    const Token &next = lexer.peek();
+    if (next.is(tok::colon)) {
+      std::string label = tok.getSpelling().str();
+      SourceLocation labelLoc = tok.getLocation();
+      advance(); // consume identifier
+      advance(); // consume colon
+      if (tok.is(tok::kw_loop)) {
+        advance();
+        auto *body = parseBlock();
+        return ctx.create<LoopExpr>(body, std::move(label), labelLoc);
+      }
+      if (tok.is(tok::kw_while)) {
+        advance();
+        Expr *condition = parseExpr();
+        auto *body = parseBlock();
+        return ctx.create<WhileExpr>(condition, body, std::move(label), labelLoc);
+      }
+      if (tok.is(tok::kw_for)) {
+        advance();
+        expect(tok::l_paren);
+        bool isConst = false;
+        if (consume(tok::kw_const)) isConst = true;
+        std::string varName;
+        if (tok.is(tok::kw_let)) advance();
+        if (tok.is(tok::identifier)) { varName = tok.getSpelling().str(); advance(); }
+        expect(tok::kw_of);
+        Expr *iterable = parseExpr();
+        expect(tok::r_paren);
+        auto *body = parseBlock();
+        return ctx.create<ForExpr>(std::move(varName), isConst, iterable, body, std::move(label), labelLoc);
+      }
+      // Not a labelled loop — this is an error
+      error(DiagID::ErrExpectedExpression, "expected loop, while, or for after label");
+      return nullptr;
+    }
+  }
+
   // Identifier, path, or struct literal.
   if (tok.is(tok::identifier)) {
     std::string name = tok.getSpelling().str();
@@ -688,13 +727,32 @@ Expr *Parser::parseIfExpr() {
   SourceLocation loc = tok.getLocation();
   advance(); // consume 'if'
 
+  // Check for `if let Pattern = expr { ... }`
+  if (tok.is(tok::kw_let)) {
+    advance(); // consume 'let'
+    Pattern *pattern = parsePattern();
+    expect(tok::equal);
+    Expr *scrutinee = parseExpr();
+    auto *thenBlock = parseBlock();
+
+    Stmt *elseBlock = nullptr;
+    if (consume(tok::kw_else)) {
+      if (tok.is(tok::kw_if)) {
+        auto *elseIf = parseIfExpr();
+        elseBlock = ctx.create<ExprStmt>(elseIf, elseIf->getLocation());
+      } else {
+        elseBlock = parseBlock();
+      }
+    }
+    return ctx.create<IfLetExpr>(pattern, scrutinee, thenBlock, elseBlock, loc);
+  }
+
   Expr *condition = parseExpr();
   auto *thenBlock = parseBlock();
 
   Stmt *elseBlock = nullptr;
   if (consume(tok::kw_else)) {
     if (tok.is(tok::kw_if)) {
-      // else if — chain
       auto *elseIf = parseIfExpr();
       elseBlock = ctx.create<ExprStmt>(elseIf, elseIf->getLocation());
     } else {
@@ -751,6 +809,17 @@ Expr *Parser::parseLoopExpr() {
 Expr *Parser::parseWhileExpr() {
   SourceLocation loc = tok.getLocation();
   advance(); // consume 'while'
+
+  // Check for `while let Pattern = expr { ... }`
+  if (tok.is(tok::kw_let)) {
+    advance(); // consume 'let'
+    Pattern *pattern = parsePattern();
+    expect(tok::equal);
+    Expr *scrutinee = parseExpr();
+    auto *body = parseBlock();
+    return ctx.create<WhileLetExpr>(pattern, scrutinee, body, "", loc);
+  }
+
   Expr *condition = parseExpr();
   auto *body = parseBlock();
   return ctx.create<WhileExpr>(condition, body, "", loc);

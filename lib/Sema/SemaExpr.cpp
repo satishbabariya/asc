@@ -59,6 +59,9 @@ Type *Sema::checkExpr(Expr *e) {
   case ExprKind::If:
     result = checkIfExpr(static_cast<IfExpr *>(e));
     break;
+  case ExprKind::IfLet:
+    result = checkIfLetExpr(static_cast<IfLetExpr *>(e));
+    break;
   case ExprKind::Match:
     result = checkMatchExpr(static_cast<MatchExpr *>(e));
     break;
@@ -67,6 +70,9 @@ Type *Sema::checkExpr(Expr *e) {
     break;
   case ExprKind::While:
     result = checkWhileExpr(static_cast<WhileExpr *>(e));
+    break;
+  case ExprKind::WhileLet:
+    result = checkWhileLetExpr(static_cast<WhileLetExpr *>(e));
     break;
   case ExprKind::For:
     result = checkForExpr(static_cast<ForExpr *>(e));
@@ -680,6 +686,41 @@ Type *Sema::checkWhileExpr(WhileExpr *e) {
   return ctx.getVoidType();
 }
 
+Type *Sema::checkWhileLetExpr(WhileLetExpr *e) {
+  Type *scrutType = checkExpr(e->getScrutinee());
+  pushScope();
+  if (auto *ep = dynamic_cast<EnumPattern *>(e->getPattern())) {
+    const auto &path = ep->getPath();
+    std::vector<Type *> payloadTypes;
+    if (path.size() >= 2 && scrutType) {
+      if (auto *nt = dynamic_cast<NamedType *>(scrutType)) {
+        auto eit = enumDecls.find(nt->getName());
+        if (eit != enumDecls.end()) {
+          for (auto *v : eit->second->getVariants()) {
+            if (v->getName() == path.back() && !v->getTupleTypes().empty()) {
+              payloadTypes = std::vector<Type *>(
+                  v->getTupleTypes().begin(), v->getTupleTypes().end());
+              break;
+            }
+          }
+        }
+      }
+    }
+    for (unsigned i = 0; i < ep->getArgs().size(); ++i) {
+      if (auto *ip = dynamic_cast<IdentPattern *>(ep->getArgs()[i])) {
+        Symbol sym;
+        sym.name = ip->getName().str();
+        sym.type = (i < payloadTypes.size()) ? payloadTypes[i] : scrutType;
+        currentScope->declare(ip->getName(), std::move(sym));
+      }
+    }
+  }
+  if (e->getBody())
+    checkCompoundStmt(e->getBody());
+  popScope();
+  return ctx.getVoidType();
+}
+
 Type *Sema::checkLoopExpr(LoopExpr *e) {
   pushScope();
   if (e->getBody())
@@ -1073,6 +1114,63 @@ Type *Sema::checkIfExpr(IfExpr *e) {
         if (sym) sym->isMoved = true; // conservatively mark as moved
       }
     }
+  }
+
+  return ctx.getVoidType();
+}
+
+Type *Sema::checkIfLetExpr(IfLetExpr *e) {
+  Type *scrutType = checkExpr(e->getScrutinee());
+
+  pushScope();
+  // Bind pattern variables in the then-block scope.
+  if (e->getPattern()) {
+    if (auto *ep = dynamic_cast<EnumPattern *>(e->getPattern())) {
+      const auto &path = ep->getPath();
+      std::vector<Type *> payloadTypes;
+      if (path.size() >= 2 && scrutType) {
+        if (auto *nt = dynamic_cast<NamedType *>(scrutType)) {
+          auto eit = enumDecls.find(nt->getName());
+          if (eit != enumDecls.end()) {
+            for (auto *v : eit->second->getVariants()) {
+              if (v->getName() == path.back()) {
+                if (!v->getTupleTypes().empty())
+                  payloadTypes = std::vector<Type *>(
+                      v->getTupleTypes().begin(), v->getTupleTypes().end());
+                break;
+              }
+            }
+          }
+        }
+      }
+      for (unsigned i = 0; i < ep->getArgs().size(); ++i) {
+        if (auto *ip = dynamic_cast<IdentPattern *>(ep->getArgs()[i])) {
+          Symbol sym;
+          sym.name = ip->getName().str();
+          sym.type = (i < payloadTypes.size()) ? payloadTypes[i] : scrutType;
+          currentScope->declare(ip->getName(), std::move(sym));
+        }
+      }
+    }
+    if (auto *ip = dynamic_cast<IdentPattern *>(e->getPattern())) {
+      Symbol sym;
+      sym.name = ip->getName().str();
+      sym.type = scrutType;
+      currentScope->declare(ip->getName(), std::move(sym));
+    }
+  }
+
+  if (e->getThenBlock())
+    checkCompoundStmt(e->getThenBlock());
+  popScope();
+
+  if (e->getElseBlock()) {
+    pushScope();
+    if (auto *cs = dynamic_cast<CompoundStmt *>(e->getElseBlock()))
+      checkCompoundStmt(cs);
+    else if (auto *es = dynamic_cast<ExprStmt *>(e->getElseBlock()))
+      checkExpr(es->getExpr());
+    popScope();
   }
 
   return ctx.getVoidType();

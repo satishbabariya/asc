@@ -57,9 +57,11 @@ Stmt *Parser::parseStmt() {
     advance();
     std::string label;
     Expr *value = nullptr;
-    // Label: `break outer;`
-    if (tok.is(tok::identifier) && lexer.peek().is(tok::colon)) {
-      // Actually labels use `outer:` before loops, break just uses `break outer`
+    // Label: `break outer;` — identifier followed by semicolon or brace
+    if (tok.is(tok::identifier) &&
+        lexer.peek().isOneOf(tok::semicolon, tok::r_brace)) {
+      label = tok.getSpelling().str();
+      advance();
     }
     if (!tok.isOneOf(tok::semicolon, tok::r_brace))
       value = parseExpr();
@@ -121,7 +123,10 @@ Stmt *Parser::parseLetOrConstStmt() {
   std::string name;
 
   // Simple name or destructuring pattern.
-  if (tok.is(tok::identifier)) {
+  // An identifier followed by `::` is an enum pattern (e.g. Option::Some(x)).
+  if (tok.is(tok::identifier) && lexer.peek().is(tok::coloncolon)) {
+    pattern = parsePattern();
+  } else if (tok.is(tok::identifier)) {
     name = tok.getSpelling().str();
     advance();
   } else if (tok.is(tok::l_bracket) || tok.is(tok::l_brace) ||
@@ -141,9 +146,11 @@ Stmt *Parser::parseLetOrConstStmt() {
   if (consume(tok::equal))
     init = parseExpr();
 
-  // `else` for let-else
-  // DECISION: let-else parses `else { block }` but we store it as part of
-  // the VarDecl for simplicity.
+  // let-else: `let Pattern = expr else { diverge };`
+  CompoundStmt *elseBlock = nullptr;
+  if (consume(tok::kw_else)) {
+    elseBlock = parseBlock();
+  }
 
   consume(tok::semicolon);
 
@@ -151,7 +158,7 @@ Stmt *Parser::parseLetOrConstStmt() {
                                    pattern, loc);
   if (isConst)
     return ctx.create<ConstStmt>(decl, loc);
-  return ctx.create<LetStmt>(decl, loc);
+  return ctx.create<LetStmt>(decl, loc, elseBlock);
 }
 
 } // namespace asc

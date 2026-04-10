@@ -81,6 +81,7 @@ public:
   mlir::Value visitUnaryExpr(UnaryExpr *e);
   mlir::Value visitCallExpr(CallExpr *e);
   mlir::Value visitIfExpr(IfExpr *e);
+  mlir::Value visitIfLetExpr(IfLetExpr *e);
   mlir::Value visitBlockExpr(BlockExpr *e);
   mlir::Value visitAssignExpr(AssignExpr *e);
   mlir::Value visitArrayLiteral(ArrayLiteral *e);
@@ -94,6 +95,7 @@ public:
   mlir::Value visitMatchExpr(MatchExpr *e);
   mlir::Value visitLoopExpr(LoopExpr *e);
   mlir::Value visitWhileExpr(WhileExpr *e);
+  mlir::Value visitWhileLetExpr(WhileLetExpr *e);
   mlir::Value visitForExpr(ForExpr *e);
   mlir::Value visitRangeExpr(RangeExpr *e);
   mlir::Value visitCharLiteral(CharLiteral *e);

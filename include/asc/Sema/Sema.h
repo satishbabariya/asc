@@ -102,6 +102,7 @@ private:
   Type *checkUnaryExpr(UnaryExpr *e);
   Type *checkCallExpr(CallExpr *e);
   Type *checkIfExpr(IfExpr *e);
+  Type *checkIfLetExpr(IfLetExpr *e);
   Type *checkBlockExpr(BlockExpr *e);
   Type *checkAssignExpr(AssignExpr *e);
   Type *checkMethodCallExpr(MethodCallExpr *e);
@@ -110,6 +111,7 @@ private:
   Type *checkMatchExpr(MatchExpr *e);
   Type *checkForExpr(ForExpr *e);
   Type *checkWhileExpr(WhileExpr *e);
+  Type *checkWhileLetExpr(WhileLetExpr *e);
   Type *checkLoopExpr(LoopExpr *e);
   Type *checkClosureExpr(ClosureExpr *e);
   Type *checkRangeExpr(RangeExpr *e);

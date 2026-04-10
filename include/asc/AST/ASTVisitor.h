@@ -123,12 +123,16 @@ public:
       return getDerived().visitRangeExpr(static_cast<RangeExpr *>(e));
     case ExprKind::If:
       return getDerived().visitIfExpr(static_cast<IfExpr *>(e));
+    case ExprKind::IfLet:
+      return getDerived().visitIfLetExpr(static_cast<IfLetExpr *>(e));
     case ExprKind::Match:
       return getDerived().visitMatchExpr(static_cast<MatchExpr *>(e));
     case ExprKind::Loop:
       return getDerived().visitLoopExpr(static_cast<LoopExpr *>(e));
     case ExprKind::While:
       return getDerived().visitWhileExpr(static_cast<WhileExpr *>(e));
+    case ExprKind::WhileLet:
+      return getDerived().visitWhileLetExpr(static_cast<WhileLetExpr *>(e));
     case ExprKind::For:
       return getDerived().visitForExpr(static_cast<ForExpr *>(e));
     case ExprKind::Closure:
@@ -203,9 +207,11 @@ public:
   DEFAULT_VISIT(CastExpr)
   DEFAULT_VISIT(RangeExpr)
   DEFAULT_VISIT(IfExpr)
+  DEFAULT_VISIT(IfLetExpr)
   DEFAULT_VISIT(MatchExpr)
   DEFAULT_VISIT(LoopExpr)
   DEFAULT_VISIT(WhileExpr)
+  DEFAULT_VISIT(WhileLetExpr)
   DEFAULT_VISIT(ForExpr)
   DEFAULT_VISIT(ClosureExpr)
   DEFAULT_VISIT(AssignExpr)

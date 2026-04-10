@@ -39,9 +39,11 @@ enum class ExprKind {
   Cast,
   Range,
   If,
+  IfLet,
   Match,
   Loop,
   While,
+  WhileLet,
   For,
   Closure,
   Assign,
@@ -460,6 +462,29 @@ private:
   Stmt *elseBlock; // nullable
 };
 
+class IfLetExpr : public Expr {
+public:
+  IfLetExpr(Pattern *pattern, Expr *scrutinee, CompoundStmt *thenBlock,
+            Stmt *elseBlock, SourceLocation loc)
+      : Expr(ExprKind::IfLet, loc), pattern(pattern), scrutinee(scrutinee),
+        thenBlock(thenBlock), elseBlock(elseBlock) {}
+
+  Pattern *getPattern() const { return pattern; }
+  Expr *getScrutinee() const { return scrutinee; }
+  CompoundStmt *getThenBlock() const { return thenBlock; }
+  Stmt *getElseBlock() const { return elseBlock; }
+
+  static bool classof(const Expr *e) {
+    return e->getKind() == ExprKind::IfLet;
+  }
+
+private:
+  Pattern *pattern;
+  Expr *scrutinee;
+  CompoundStmt *thenBlock;
+  Stmt *elseBlock; // nullable
+};
+
 /// Match arm: `pattern => expr`
 struct MatchArm {
   Pattern *pattern;
@@ -520,6 +545,29 @@ public:
 
 private:
   Expr *condition;
+  CompoundStmt *body;
+  std::string label;
+};
+
+class WhileLetExpr : public Expr {
+public:
+  WhileLetExpr(Pattern *pattern, Expr *scrutinee, CompoundStmt *body,
+               std::string label, SourceLocation loc)
+      : Expr(ExprKind::WhileLet, loc), pattern(pattern), scrutinee(scrutinee),
+        body(body), label(std::move(label)) {}
+
+  Pattern *getPattern() const { return pattern; }
+  Expr *getScrutinee() const { return scrutinee; }
+  CompoundStmt *getBody() const { return body; }
+  llvm::StringRef getLabel() const { return label; }
+
+  static bool classof(const Expr *e) {
+    return e->getKind() == ExprKind::WhileLet;
+  }
+
+private:
+  Pattern *pattern;
+  Expr *scrutinee;
   CompoundStmt *body;
   std::string label;
 };
