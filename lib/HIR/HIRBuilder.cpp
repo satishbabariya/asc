@@ -2314,6 +2314,127 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return result.getResult();
   }
 
+  // Vec::pop() → call __asc_vec_pop(self, &out, sizeof(T)), load result.
+  if (methodName == "pop" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+
+    auto popFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_pop");
+    if (!popFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(
+          i32Ty, {ptrType, ptrType, i32Ty});
+      popFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_pop", fnType);
+    }
+
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto outAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, i32Ty, i64One);
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4));
+
+    builder.create<mlir::LLVM::CallOp>(
+        location, popFn, mlir::ValueRange{receiver, outAlloca, elemSize});
+    return builder.create<mlir::LLVM::LoadOp>(location, i32Ty, outAlloca);
+  }
+
+  // Vec::is_empty() → __asc_vec_len(self) == 0
+  if (methodName == "is_empty" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i64Ty = builder.getIntegerType(64);
+
+    auto lenFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_len");
+    if (!lenFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i64Ty, {ptrType});
+      lenFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_len", fnType);
+    }
+
+    auto lenVal = builder.create<mlir::LLVM::CallOp>(
+        location, lenFn, mlir::ValueRange{receiver}).getResult();
+    auto zero = builder.create<mlir::LLVM::ConstantOp>(
+        location, i64Ty, static_cast<int64_t>(0));
+    return builder.create<mlir::LLVM::ICmpOp>(
+        location, mlir::LLVM::ICmpPredicate::eq, lenVal, zero);
+  }
+
+  // HashMap::remove(key) → __asc_hashmap_remove(self, &key)
+  if (methodName == "remove" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    auto ptrType = getPtrType();
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+    auto removeFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_remove");
+    if (!removeFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, ptrType});
+      removeFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_hashmap_remove", fnType);
+    }
+
+    mlir::Value key = args[1];
+    auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+        location, builder.getIntegerType(64), static_cast<int64_t>(1));
+    auto keyAlloca = builder.create<mlir::LLVM::AllocaOp>(
+        location, ptrType, key.getType(), i64One);
+    builder.create<mlir::LLVM::StoreOp>(location, key, keyAlloca);
+
+    builder.create<mlir::LLVM::CallOp>(
+        location, removeFn, mlir::ValueRange{receiver, keyAlloca});
+    return {};
+  }
+
+  // HashMap::len() → __asc_hashmap_len(self)
+  if (methodName == "len" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() == 1) {
+    // Note: Vec::len is handled earlier. This catches HashMap::len.
+    // We check for it AFTER the Vec::len handler to avoid conflicts.
+    auto ptrType = getPtrType();
+    auto i64Ty = builder.getIntegerType(64);
+
+    auto lenFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_len");
+    if (!lenFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i64Ty, {ptrType});
+      lenFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_hashmap_len", fnType);
+    }
+
+    auto lenCall = builder.create<mlir::LLVM::CallOp>(
+        location, lenFn, mlir::ValueRange{receiver});
+    return lenCall.getResult();
+  }
+
+  // String::as_ptr() or String::as_str() → __asc_string_as_ptr(self)
+  if ((methodName == "as_ptr" || methodName == "as_str") && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+
+    auto asPtrFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_as_ptr");
+    if (!asPtrFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      asPtrFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_string_as_ptr", fnType);
+    }
+
+    auto call = builder.create<mlir::LLVM::CallOp>(
+        location, asPtrFn, mlir::ValueRange{receiver});
+    return call.getResult();
+  }
+
   // Vec::iter() → call __asc_vec_iter(vec_ptr, elem_size) → iterator ptr.
   if (methodName == "iter" && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
