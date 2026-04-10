@@ -1,4 +1,5 @@
 #include "asc/Sema/Sema.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 
 namespace asc {
@@ -570,6 +571,55 @@ Type *Sema::checkMatchExpr(MatchExpr *e) {
     }
     popScope();
   }
+  // Basic match exhaustiveness check for enum types.
+  if (scrutType) {
+    if (auto *nt = dynamic_cast<NamedType *>(scrutType)) {
+      auto eit = enumDecls.find(nt->getName());
+      if (eit != enumDecls.end()) {
+        // Collect matched variant names.
+        llvm::StringSet<> matchedVariants;
+        bool hasWildcard = false;
+        for (const auto &arm : e->getArms()) {
+          if (!arm.pattern)
+            continue;
+          if (dynamic_cast<WildcardPattern *>(arm.pattern)) {
+            hasWildcard = true;
+            break;
+          }
+          if (auto *ep = dynamic_cast<EnumPattern *>(arm.pattern)) {
+            const auto &path = ep->getPath();
+            if (!path.empty())
+              matchedVariants.insert(path.back());
+          }
+          if (auto *ip = dynamic_cast<IdentPattern *>(arm.pattern)) {
+            // A bare identifier pattern acts as a wildcard binding.
+            hasWildcard = true;
+            break;
+          }
+        }
+
+        if (!hasWildcard) {
+          // Check that all variants are covered.
+          llvm::SmallVector<llvm::StringRef, 4> missing;
+          for (auto *v : eit->second->getVariants()) {
+            if (!matchedVariants.contains(v->getName()))
+              missing.push_back(v->getName());
+          }
+          if (!missing.empty()) {
+            std::string missingStr;
+            for (unsigned i = 0; i < missing.size(); ++i) {
+              if (i > 0) missingStr += ", ";
+              missingStr += missing[i].str();
+            }
+            diags.emitWarning(e->getLocation(),
+                DiagID::WarnNonExhaustiveMatch,
+                "non-exhaustive match: missing variants: " + missingStr);
+          }
+        }
+      }
+    }
+  }
+
   return armType;
 }
 
