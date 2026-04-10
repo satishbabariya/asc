@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test generic function.
 
 function identity<T>(x: own<T>): own<T> {

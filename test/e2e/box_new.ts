@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Box<T> heap allocation and dereference.
 
 function boxed_add(a: i32, b: i32): i32 {

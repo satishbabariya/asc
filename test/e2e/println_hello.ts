@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: println! macro produces output.
 
 function main(): i32 {

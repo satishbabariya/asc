@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test conditional move: value moved in one branch but not another.
 // Expected: W001 warning (drop flag inserted).
 

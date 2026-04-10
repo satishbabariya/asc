@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: struct with impl methods — Matrix determinant and trace.
 
 struct Matrix2x2 {

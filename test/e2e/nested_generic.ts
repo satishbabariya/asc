@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: nested generic instantiation.
 
 function identity<T>(x: T): T {

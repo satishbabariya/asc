@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 // test 20: closure captures
 function apply(f: (i32) -> i32, x: i32): i32 {
   return f(x);

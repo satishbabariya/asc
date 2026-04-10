@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: generic function monomorphization.
 
 function identity<T>(x: T): T {

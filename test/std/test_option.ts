@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Option<T> methods.
 function main(): i32 {
   // Some.

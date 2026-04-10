@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Semaphore acquire/release.
 
 function main(): i32 {

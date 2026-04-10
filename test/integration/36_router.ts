@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // test 36: router with HashMap
 function main(): i32 {
   let m = HashMap::new();

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: for loop with range.
 
 function sum_range(n: i32): i32 {

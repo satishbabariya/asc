@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: struct field access end-to-end.
 // Expected: compiles to valid MLIR with GEP + load for field access.
 

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: iterative fibonacci for large n.
 
 function fib(n: i32): i32 {

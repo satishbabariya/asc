@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Simplest possible program: function returning a constant.
 // This is the primary end-to-end verification test.
 // Pipeline: Source → Lexer → Parser → AST → Sema → HIR → BorrowCheck →

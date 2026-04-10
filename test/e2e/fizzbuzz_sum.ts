@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 function fizzbuzz_sum(n: i32): i32 {
   let sum: i32 = 0; let i: i32 = 1;
   while i <= n {

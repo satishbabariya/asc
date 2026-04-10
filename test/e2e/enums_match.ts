@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // End-to-end test: enums and pattern matching with tuple variants.
 
 enum Shape {

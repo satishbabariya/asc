@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Box<T>.
 function main(): i32 {
   const b = Box::new(42);

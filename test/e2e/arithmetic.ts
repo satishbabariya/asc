@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test arithmetic operations through the full pipeline.
 
 function add(a: i32, b: i32): i32 {

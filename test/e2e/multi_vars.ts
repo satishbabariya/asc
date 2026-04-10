@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: multiple variable declarations and arithmetic.
 
 function main(): i32 {

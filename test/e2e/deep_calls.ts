@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: deep call chain through 5 functions.
 
 function a(x: i32): i32 { return b(x + 1); }

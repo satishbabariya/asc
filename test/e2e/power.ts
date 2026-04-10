@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 function power(base: i32, exp: i32): i32 {
   let result: i32 = 1;
   let i: i32 = 0;

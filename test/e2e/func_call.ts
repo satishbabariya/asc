@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: function calling other function.
 
 function add(a: i32, b: i32): i32 {

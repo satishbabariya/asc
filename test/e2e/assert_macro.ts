@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: assert! macro panics on false.
 
 function main(): i32 {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: infinite loop with break.
 
 function count_to(target: i32): i32 {

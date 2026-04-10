@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: for-in loop to sum Vec elements.
 
 function main(): i32 {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: for loop with break.
 
 function find_in_range(target: i32): i32 {

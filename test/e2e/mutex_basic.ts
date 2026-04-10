@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Mutex lock/unlock.
 
 function main(): i32 {

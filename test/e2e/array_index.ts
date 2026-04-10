@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: array literal with indexing.
 
 function get_second(): i32 {

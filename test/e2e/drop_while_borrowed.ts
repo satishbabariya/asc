@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: borrow used within scope — no dangling reference.
 
 struct Data { value: i32 }

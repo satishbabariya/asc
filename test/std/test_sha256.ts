@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: SHA-256 — validates the module structure compiles.
 function main(): i32 {
   // SHA-256 test requires the crypto module.

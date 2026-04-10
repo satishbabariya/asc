@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Sieve of Eratosthenes using arrays and loops.
 // Count primes up to N.
 

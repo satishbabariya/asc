@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: nested function calls and expressions.
 
 function square(x: i32): i32 {

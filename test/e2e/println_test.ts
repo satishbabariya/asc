@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: println! with string and integer arguments.
 
 function main(): i32 {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: enum with match-as-expression inside function.
 
 enum Direction {

@@ -1,3 +1,4 @@
+// RUN: %asc check %s 2>&1 || true
 trait Shape { fn area(ref<Self>): i32; }
 struct Square { side: i32 }
 struct Rect { w: i32, h: i32 }

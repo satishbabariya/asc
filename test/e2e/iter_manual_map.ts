@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: manual map pattern — double each element using indexed loop.
 
 function main(): i32 {

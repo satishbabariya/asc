@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: Path manipulation.
 function main(): i32 {
   assert_eq!(path::basename("/home/user/file.ts"), "file.ts");

@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: fold-like pattern using for-in loop (sum accumulation).
 
 function main(): i32 {

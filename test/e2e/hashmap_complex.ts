@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: HashMap with many entries and lookup.
 
 function main(): i32 {

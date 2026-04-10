@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test @copy semantics: Point is copied, not moved.
 
 @copy

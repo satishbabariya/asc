@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // test 08: nested struct field access
 struct Vec2 {
   x: i32,

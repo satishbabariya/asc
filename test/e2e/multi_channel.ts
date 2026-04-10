@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: multiple independent channels.
 
 function main(): i32 {

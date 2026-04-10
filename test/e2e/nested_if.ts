@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: deeply nested if/else chains.
 
 function classify(x: i32): i32 {

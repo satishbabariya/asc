@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: multiple features combined.
 
 @copy

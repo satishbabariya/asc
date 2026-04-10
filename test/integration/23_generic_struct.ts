@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // test 23: generic struct monomorphization
 struct Pair<A, B> {
   first: A,

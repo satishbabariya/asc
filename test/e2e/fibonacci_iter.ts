@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: fibonacci with loop and mutable variables.
 
 function fib(n: i32): i32 {

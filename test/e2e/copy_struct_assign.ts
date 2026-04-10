@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: @copy struct assignment — copy semantics, no move.
 
 @copy

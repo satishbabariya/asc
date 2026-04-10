@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: match with return in each arm.
 
 enum Shape {

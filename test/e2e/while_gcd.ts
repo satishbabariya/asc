@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: GCD via Euclidean algorithm.
 
 function gcd(a: i32, b: i32): i32 {

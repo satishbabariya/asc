@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: nested loops with break affecting only inner loop.
 
 function find_pair_sum(target: i32): i32 {

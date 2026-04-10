@@ -1,3 +1,4 @@
+// RUN: %asc check %s
 // Test: @copy struct passed through function in a loop.
 
 @copy
