@@ -826,8 +826,60 @@ Type *Sema::checkMacroCallExpr(MacroCallExpr *e) {
 
 Type *Sema::checkTryExpr(TryExpr *e) {
   Type *innerType = checkExpr(e->getOperand());
-  // DECISION: ? operator on Result<T,E> produces T; on Option<T> produces T.
-  // For now, pass through the inner type since we lack generic resolution.
+  if (!innerType)
+    return nullptr;
+
+  // Check if the operand type is Result<T,E> or Option<T>.
+  if (auto *nt = dynamic_cast<NamedType *>(innerType)) {
+    llvm::StringRef name = nt->getName();
+
+    // Result<T,E> → unwrap to T.
+    // Monomorphized names look like "Result_i32_String".
+    if (name.starts_with("Result")) {
+      // The function must return Result to propagate the error.
+      if (currentReturnType) {
+        if (auto *retNt = dynamic_cast<NamedType *>(currentReturnType)) {
+          if (!retNt->getName().starts_with("Result")) {
+            diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
+                            "? operator requires enclosing function to return Result");
+          }
+        }
+      }
+      // Look up the Ok variant's type from the enum declaration.
+      auto eit = enumDecls.find(name);
+      if (eit != enumDecls.end()) {
+        for (auto *v : eit->second->getVariants()) {
+          if (v->getName() == "Ok" && !v->getTupleTypes().empty())
+            return v->getTupleTypes()[0];
+        }
+      }
+      return innerType; // Fallback if we can't resolve the Ok type.
+    }
+
+    // Option<T> → unwrap to T.
+    if (name.starts_with("Option")) {
+      if (currentReturnType) {
+        if (auto *retNt = dynamic_cast<NamedType *>(currentReturnType)) {
+          if (!retNt->getName().starts_with("Option")) {
+            diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
+                            "? operator requires enclosing function to return Option");
+          }
+        }
+      }
+      auto eit = enumDecls.find(name);
+      if (eit != enumDecls.end()) {
+        for (auto *v : eit->second->getVariants()) {
+          if (v->getName() == "Some" && !v->getTupleTypes().empty())
+            return v->getTupleTypes()[0];
+        }
+      }
+      return innerType;
+    }
+  }
+
+  // Neither Result nor Option.
+  diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
+                  "? operator requires Result<T,E> or Option<T> operand");
   return innerType;
 }
 
