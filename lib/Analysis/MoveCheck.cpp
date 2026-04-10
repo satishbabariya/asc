@@ -152,14 +152,16 @@ void MoveCheckPass::checkOperandStates(mlir::Operation *op,
       reportUseAfterMove(op, operand, firstMoveOp[operand]);
       break;
     case MoveState::MaybeMoved: {
-      mlir::InFlightDiagnostic diag = op->emitError()
+      // RFC specifies conditional moves as warnings, not errors.
+      // Drop-flag insertion (RFC-0008) will handle the runtime behavior.
+      mlir::InFlightDiagnostic diag = op->emitWarning()
           << "value may have been moved on a previous path";
       if (auto moveIt = firstMoveOp.find(operand);
           moveIt != firstMoveOp.end()) {
         diag.attachNote(moveIt->second->getLoc())
             << "value possibly moved here";
       }
-      signalPassFailure();
+      // Not signalPassFailure() — this is a warning, not an error.
       break;
     }
     case MoveState::Dropped:
