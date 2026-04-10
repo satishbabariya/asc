@@ -1030,13 +1030,19 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         v = emitMove(v, location);
       break;
     case OwnershipKind::Borrowed:
-      // Shared borrow.
+      // Shared borrow: emit borrow_ref for owned values or raw pointers.
       if (mlir::isa<own::OwnValType>(v.getType()))
+        v = emitBorrowRef(v, location);
+      else if (mlir::isa<mlir::LLVM::LLVMPointerType>(v.getType()) &&
+               !mlir::isa<own::BorrowType>(v.getType()) &&
+               !mlir::isa<own::BorrowMutType>(v.getType()))
         v = emitBorrowRef(v, location);
       break;
     case OwnershipKind::BorrowedMut:
-      // Mutable borrow.
+      // Mutable borrow: emit borrow_mut for owned values or raw pointers.
       if (mlir::isa<own::OwnValType>(v.getType()))
+        v = emitBorrowMut(v, location);
+      else if (mlir::isa<mlir::LLVM::LLVMPointerType>(v.getType()))
         v = emitBorrowMut(v, location);
       break;
     default:
