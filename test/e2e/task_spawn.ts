@@ -1,4 +1,4 @@
-// RUN: %asc check %s 2>&1 || true
+// RUN: %asc check %s
 // Test: task.spawn creates a real OS thread via pthread_create.
 
 function worker(): void {

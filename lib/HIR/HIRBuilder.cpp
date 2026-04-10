@@ -3766,17 +3766,20 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
   // For now, just call the closure directly (single-threaded emulation).
   if (name == "task_spawn") {
     if (!e->getArgs().empty()) {
-      mlir::Value closureFnPtr = visitExpr(e->getArgs()[0]);
-      if (closureFnPtr && mlir::isa<mlir::LLVM::LLVMPointerType>(closureFnPtr.getType())) {
+      // Get closure function name directly from AST to avoid emitting
+      // an llvm.addressof for a func.func (which fails MLIR verification).
+      std::string closureFnName;
+      if (auto *dref = dynamic_cast<DeclRefExpr *>(e->getArgs()[0]))
+        closureFnName = dref->getName().str();
+      else if (auto *pathExpr = dynamic_cast<PathExpr *>(e->getArgs()[0])) {
+        if (!pathExpr->getSegments().empty())
+          closureFnName = pathExpr->getSegments().back();
+      }
+
+      if (!closureFnName.empty()) {
         auto ptrType = getPtrType();
         auto i32Type = builder.getIntegerType(32);
         auto i64Type = builder.getIntegerType(64);
-
-        // Get the closure function name from AddressOfOp.
-        std::string closureFnName;
-        if (auto *defOp = closureFnPtr.getDefiningOp())
-          if (auto addrOp = mlir::dyn_cast<mlir::LLVM::AddressOfOp>(defOp))
-            closureFnName = addrOp.getGlobalName().str();
 
         // Generate pthread-compatible wrapper: ptr __task_N_wrapper(ptr arg)
         static unsigned taskCounter = 0;
