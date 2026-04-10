@@ -8,7 +8,9 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "mlir/Interfaces/ControlFlowInterfaces.h"
 
 namespace asc {
 
@@ -173,25 +175,45 @@ void RegionInferencePass::extendRegionsToUses(mlir::func::FuncOp func) {
         region.points.push_back(usePoint);
 
       // If the use is in a different block than the definition, extend
-      // the region to cover all intermediate blocks on the CFG path.
+      // the region to cover all blocks reachable on any CFG path from def to use.
       if (!region.points.empty()) {
         unsigned defBlockIdx = region.points[0].blockIndex;
         if (useBlockIdx != defBlockIdx) {
-          // Add entry/exit points for all blocks between def and use.
-          // Walk forward through blocks (simplified — assumes linear CFG).
-          unsigned lo = std::min(defBlockIdx, useBlockIdx);
-          unsigned hi = std::max(defBlockIdx, useBlockIdx);
-          for (unsigned b = lo; b <= hi; ++b) {
-            CFGPoint entry{b, 0};
-            bool found = false;
-            for (const auto &p : region.points) {
-              if (p.blockIndex == b) {
-                found = true;
-                break;
+          // Find the def block pointer from the index.
+          mlir::Block *defBlock = nullptr;
+          for (auto &[blk, idx] : blockIndex) {
+            if (idx == defBlockIdx) {
+              defBlock = blk;
+              break;
+            }
+          }
+          if (defBlock) {
+            // BFS from def block, collecting all reachable blocks.
+            llvm::SmallVector<mlir::Block *, 16> worklist;
+            llvm::DenseSet<mlir::Block *> visited;
+            worklist.push_back(defBlock);
+            visited.insert(defBlock);
+            while (!worklist.empty()) {
+              mlir::Block *cur = worklist.pop_back_val();
+              for (mlir::Block *succ : cur->getSuccessors()) {
+                if (visited.insert(succ).second) {
+                  worklist.push_back(succ);
+                }
               }
             }
-            if (!found)
-              region.points.push_back(entry);
+            // Add entry points for all reachable blocks.
+            for (mlir::Block *reachable : visited) {
+              unsigned reachIdx = blockIndex[reachable];
+              bool found = false;
+              for (const auto &p : region.points) {
+                if (p.blockIndex == reachIdx) {
+                  found = true;
+                  break;
+                }
+              }
+              if (!found)
+                region.points.push_back(CFGPoint{reachIdx, 0});
+            }
           }
         }
       }
@@ -224,24 +246,21 @@ void RegionInferencePass::propagateThroughPhis(mlir::func::FuncOp func) {
           if (terminator->getSuccessor(succIdx) != &block)
             continue;
 
-          // Get successor operands for this edge.
-          // DECISION: Skip successor operand analysis — use simpler
-          // block argument propagation instead of getSuccessorOperands
-          // which was removed in MLIR 18.
-          (void)succIdx;
-          // DECISION: Successor operand propagation skipped for MLIR 18.
-          // Region merging through phi nodes deferred.
-          if (false) {
-            mlir::Value incomingVal;
-            auto inIt = result.valueToRegion.find(incomingVal);
+          // Use BranchOpInterface to get successor operands.
+          if (auto branchOp = mlir::dyn_cast<mlir::BranchOpInterface>(terminator)) {
+            auto succOperands = branchOp.getSuccessorOperands(succIdx);
+            if (argIdx < succOperands.size()) {
+              mlir::Value incomingVal = succOperands[argIdx];
+              auto inIt = result.valueToRegion.find(incomingVal);
 
-            if (argIt != result.valueToRegion.end() &&
-                inIt != result.valueToRegion.end()) {
-              result.unionFind.merge(argIt->second, inIt->second);
-            } else if (inIt != result.valueToRegion.end() &&
-                       argIt == result.valueToRegion.end()) {
-              result.valueToRegion[blockArg] = inIt->second;
-              argIt = result.valueToRegion.find(blockArg);
+              if (argIt != result.valueToRegion.end() &&
+                  inIt != result.valueToRegion.end()) {
+                result.unionFind.merge(argIt->second, inIt->second);
+              } else if (inIt != result.valueToRegion.end() &&
+                         argIt == result.valueToRegion.end()) {
+                result.valueToRegion[blockArg] = inIt->second;
+                argIt = result.valueToRegion.find(blockArg);
+              }
             }
           }
         }
