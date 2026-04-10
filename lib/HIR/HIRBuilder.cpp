@@ -958,29 +958,28 @@ mlir::Value HIRBuilder::visitUnaryExpr(UnaryExpr *e) {
     return builder.create<mlir::arith::XOrIOp>(location, operand, allOnes);
   }
   case UnaryOp::AddrOf: {
-    // For &c where c is a mutable variable backed by alloca:
-    // - If alloca holds a scalar: return the alloca pointer
-    // - If alloca holds a pointer (struct): load the pointer from alloca
+    // For &x: get the pointer and emit own.borrow_ref so the borrow
+    // checker can track the borrow.
     if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getOperand())) {
       mlir::Value rawPtr = lookup(ref->getName());
       if (rawPtr && mlir::isa<mlir::LLVM::LLVMPointerType>(rawPtr.getType())) {
+        mlir::Value ptr = rawPtr;
         auto *defOp = rawPtr.getDefiningOp();
         if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
           auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
           mlir::Type elemType = allocaOp.getElemType();
           // If alloca holds a pointer (struct ref), load the inner pointer.
           if (elemType && mlir::isa<mlir::LLVM::LLVMPointerType>(elemType)) {
-            return builder.create<mlir::LLVM::LoadOp>(location, elemType,
-                                                       rawPtr);
+            ptr = builder.create<mlir::LLVM::LoadOp>(location, elemType,
+                                                      rawPtr);
           }
-          // Otherwise return the alloca pointer itself (scalar addr).
-          return rawPtr;
         }
-        return rawPtr;
+        // Emit borrow_ref so the borrow checker tracks this borrow.
+        return emitBorrowRef(ptr, location);
       }
     }
     if (mlir::isa<mlir::LLVM::LLVMPointerType>(operand.getType()))
-      return operand;
+      return emitBorrowRef(operand, location);
     return emitBorrowRef(operand, location);
   }
   case UnaryOp::Deref: {
