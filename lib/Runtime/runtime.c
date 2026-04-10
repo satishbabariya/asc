@@ -163,8 +163,13 @@ void __asc_print_i32_ln(int value) {
 extern int main(void);
 
 #ifdef __wasm__
+// WASI proc_exit sets the process exit code.
+void __wasi_proc_exit(int code) __attribute__((__import_module__("wasi_snapshot_preview1"),
+                                                __import_name__("proc_exit")));
+
 void _start(void) {
   int ret = main();
-  (void)ret;
+  if (ret != 0)
+    __wasi_proc_exit(ret);
 }
 #endif

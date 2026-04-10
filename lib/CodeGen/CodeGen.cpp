@@ -164,9 +164,23 @@ bool CodeGenerator::setupTargetMachine() {
   }
 
   llvm::TargetOptions targetOpts;
+  // Wasm targets need specific CPU and feature strings.
+  std::string cpu = "generic";
+  std::string features;
+  llvm::Triple triple(opts.targetTriple);
+  if (triple.isWasm()) {
+    cpu = "generic";
+    // Enable bulk-memory for memcpy, mutable-globals for TLS.
+    features = "+bulk-memory,+mutable-globals,+sign-ext";
+  }
+  // Use O0 for the TargetMachine codegen level. Optimization is handled
+  // by the new-PM in runLLVMOptPasses(). The legacy PM in the Wasm backend
+  // crashes at O2+ due to pass scheduling issues in LLVM 18.
+  auto codegenOpt = triple.isWasm() ? llvm::CodeGenOptLevel::None
+                                     : getLLVMOptLevel();
   targetMachine.reset(target->createTargetMachine(
-      opts.targetTriple, "generic", "", targetOpts, llvm::Reloc::PIC_,
-      std::nullopt, getLLVMOptLevel()));
+      opts.targetTriple, cpu, features, targetOpts, llvm::Reloc::PIC_,
+      std::nullopt, codegenOpt));
   if (!targetMachine) {
     llvm::errs() << "error: could not create target machine\n";
     return false;
@@ -179,6 +193,8 @@ bool CodeGenerator::setupTargetMachine() {
 void CodeGenerator::runLLVMOptPasses() {
   if (opts.optLevel == OptLevel::O0)
     return;
+
+
 
   llvm::LoopAnalysisManager lam;
   llvm::FunctionAnalysisManager fam;
