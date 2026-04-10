@@ -188,31 +188,44 @@ void RegionInferencePass::extendRegionsToUses(mlir::func::FuncOp func) {
             }
           }
           if (defBlock) {
-            // BFS from def block, collecting all reachable blocks.
-            llvm::SmallVector<mlir::Block *, 16> worklist;
-            llvm::DenseSet<mlir::Block *> visited;
-            worklist.push_back(defBlock);
-            visited.insert(defBlock);
-            while (!worklist.empty()) {
-              mlir::Block *cur = worklist.pop_back_val();
+            // Forward BFS from def block.
+            llvm::SmallVector<mlir::Block *, 16> fwdWorklist;
+            llvm::DenseSet<mlir::Block *> fwdReachable;
+            fwdWorklist.push_back(defBlock);
+            fwdReachable.insert(defBlock);
+            while (!fwdWorklist.empty()) {
+              mlir::Block *cur = fwdWorklist.pop_back_val();
               for (mlir::Block *succ : cur->getSuccessors()) {
-                if (visited.insert(succ).second) {
-                  worklist.push_back(succ);
-                }
+                if (fwdReachable.insert(succ).second)
+                  fwdWorklist.push_back(succ);
               }
             }
-            // Add entry points for all reachable blocks.
-            for (mlir::Block *reachable : visited) {
-              unsigned reachIdx = blockIndex[reachable];
+            // Backward BFS from use block (traverse predecessors).
+            llvm::SmallVector<mlir::Block *, 16> bwdWorklist;
+            llvm::DenseSet<mlir::Block *> bwdReachable;
+            bwdWorklist.push_back(useBlock);
+            bwdReachable.insert(useBlock);
+            while (!bwdWorklist.empty()) {
+              mlir::Block *cur = bwdWorklist.pop_back_val();
+              for (mlir::Block *pred : cur->getPredecessors()) {
+                if (bwdReachable.insert(pred).second)
+                  bwdWorklist.push_back(pred);
+              }
+            }
+            // Intersect: only blocks on actual paths from def to use.
+            for (mlir::Block *blk : fwdReachable) {
+              if (!bwdReachable.contains(blk))
+                continue;
+              unsigned blkIdx = blockIndex[blk];
               bool found = false;
               for (const auto &p : region.points) {
-                if (p.blockIndex == reachIdx) {
+                if (p.blockIndex == blkIdx) {
                   found = true;
                   break;
                 }
               }
               if (!found)
-                region.points.push_back(CFGPoint{reachIdx, 0});
+                region.points.push_back(CFGPoint{blkIdx, 0});
             }
           }
         }

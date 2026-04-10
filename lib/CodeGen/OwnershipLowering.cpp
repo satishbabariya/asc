@@ -95,8 +95,14 @@ struct OwnershipLoweringPass
               if (auto elemType = allocaOp.getElemType()) {
                 if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(elemType)) {
                   isAggregate = true;
-                  // Estimate size: count body elements * 8 bytes (conservative).
-                  structSize = structTy.getBody().size() * 8;
+                  // Compute actual struct size by summing field sizes.
+                  for (mlir::Type fieldTy : structTy.getBody()) {
+                    if (fieldTy.isIntOrIndexOrFloat())
+                      structSize += (fieldTy.getIntOrFloatBitWidth() + 7) / 8;
+                    else
+                      structSize += 8; // Pointer-sized default.
+                  }
+                  if (structSize == 0) structSize = 8;
                 }
               }
             }
