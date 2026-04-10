@@ -369,7 +369,7 @@ Type *Parser::parsePrimaryType() {
 }
 
 // Pattern parsing (shared).
-Pattern *Parser::parsePattern() {
+Pattern *Parser::parseSinglePattern() {
   SourceLocation loc = tok.getLocation();
 
   // Wildcard: _
@@ -521,6 +521,25 @@ Pattern *Parser::parsePattern() {
 
   error("expected pattern");
   return ctx.create<WildcardPattern>(loc);
+}
+
+Pattern *Parser::parsePattern() {
+  Pattern *first = parseSinglePattern();
+  if (!first)
+    return nullptr;
+
+  // Check for or-pattern: pattern | pattern | ...
+  if (!tok.is(tok::pipe))
+    return first;
+
+  std::vector<Pattern *> alternatives;
+  alternatives.push_back(first);
+  while (consume(tok::pipe)) {
+    Pattern *alt = parseSinglePattern();
+    if (alt)
+      alternatives.push_back(alt);
+  }
+  return ctx.create<OrPattern>(std::move(alternatives), first->getLocation());
 }
 
 } // namespace asc

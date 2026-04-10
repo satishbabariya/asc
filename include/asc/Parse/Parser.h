@@ -83,6 +83,7 @@ private:
 
   // --- Patterns ---
   Pattern *parsePattern();
+  Pattern *parseSinglePattern();
 
   // --- Operator precedence ---
   static int getPrecedence(tok::TokenKind kind);
