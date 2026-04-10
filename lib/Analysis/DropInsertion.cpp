@@ -10,6 +10,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "asc/HIR/OwnTypes.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace asc {
@@ -19,8 +20,7 @@ namespace asc {
 //===----------------------------------------------------------------------===//
 
 static bool isOwnedType(mlir::Type type) {
-  llvm::StringRef typeName = type.getAbstractType().getName();
-  return typeName.contains("own.val");
+  return mlir::isa<asc::own::OwnValType>(type);
 }
 
 /// Check if an operation consumes its operand (move/drop/return).

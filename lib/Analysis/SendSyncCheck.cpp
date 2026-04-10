@@ -11,6 +11,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 namespace asc {
 
@@ -60,8 +61,7 @@ bool SendSyncCheckPass::isSendType(mlir::Type type) const {
     return true;
 
   // LLVM pointer types — raw pointers are NOT Send by default.
-  llvm::StringRef typeName = type.getAbstractType().getName();
-  if (typeName.contains("llvm.ptr"))
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(type))
     return false;
 
   // Default: conservatively assume not Send.
@@ -115,8 +115,7 @@ void SendSyncCheckPass::checkSpawnOps(mlir::func::FuncOp func) {
       }
 
       // For shared borrows, check Sync on the referent.
-      llvm::StringRef typeName = type.getAbstractType().getName();
-      if (typeName.contains("borrow") && !typeName.contains("borrow.mut")) {
+      if (mlir::isa<asc::own::BorrowType>(type)) {
         if (!isSyncType(type)) {
           reportNotSync(op, operand, "shared borrow in task.spawn");
         }
@@ -124,7 +123,7 @@ void SendSyncCheckPass::checkSpawnOps(mlir::func::FuncOp func) {
 
       // Mutable borrows should never reach task.spawn (caught by AliasCheck),
       // but double-check here for defense in depth.
-      if (typeName.contains("borrow.mut")) {
+      if (mlir::isa<asc::own::BorrowMutType>(type)) {
         mlir::InFlightDiagnostic diag = op->emitError()
             << "mutable borrow cannot be captured by task.spawn; "
             << "exclusive borrows cannot be shared across threads";

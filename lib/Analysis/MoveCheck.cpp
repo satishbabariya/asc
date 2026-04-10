@@ -9,6 +9,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "asc/HIR/OwnTypes.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace asc {
@@ -18,13 +19,7 @@ namespace asc {
 //===----------------------------------------------------------------------===//
 
 static bool isOwnedType(mlir::Type type) {
-  // Check if the type is an own.val type from our custom dialect.
-  // The type's mnemonic would be "own.val" in the own dialect.
-  if (auto namedType = type.dyn_cast<mlir::Type>()) {
-    llvm::StringRef typeName = type.getAbstractType().getName();
-    return typeName.contains("own.val");
-  }
-  return false;
+  return mlir::isa<asc::own::OwnValType>(type);
 }
 
 /// Check if an operation consumes (moves) its operand.
