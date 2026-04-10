@@ -2365,6 +2365,28 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
         location, mlir::LLVM::ICmpPredicate::eq, lenVal, zero);
   }
 
+  // Vec::clear() or String::clear() → call __asc_vec_clear / __asc_string_clear
+  if (methodName == "clear" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+    // Try vec_clear first, then string_clear. Both have same signature.
+    std::string fnName = "__asc_vec_clear";
+    auto clearFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(fnName);
+    if (!clearFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      clearFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, fnName, fnType);
+    }
+
+    builder.create<mlir::LLVM::CallOp>(
+        location, clearFn, mlir::ValueRange{receiver});
+    return {};
+  }
+
   // HashMap::remove(key) → __asc_hashmap_remove(self, &key)
   if (methodName == "remove" && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&

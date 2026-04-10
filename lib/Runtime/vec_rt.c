@@ -63,6 +63,11 @@ int __asc_vec_pop(AscVec *v, void *out_ptr, unsigned int elem_size) {
   return 1;
 }
 
+// Clear a vec (set len to 0, keep capacity).
+void __asc_vec_clear(AscVec *v) {
+  if (v) v->len = 0;
+}
+
 // Free a vec and its data.
 void __asc_vec_free(AscVec *v) {
   if (v) {
