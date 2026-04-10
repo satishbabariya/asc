@@ -59,18 +59,22 @@ private:
   Expr *trailingExpr;
 };
 
-/// `let x: T = expr;` or `const x: T = expr;`
+/// `let x: T = expr;` or `let Pattern = expr else { diverge };`
 class LetStmt : public Stmt {
 public:
-  LetStmt(VarDecl *decl, SourceLocation loc)
-      : Stmt(StmtKind::Let, loc), decl(decl) {}
+  LetStmt(VarDecl *decl, SourceLocation loc,
+          CompoundStmt *elseBlock = nullptr)
+      : Stmt(StmtKind::Let, loc), decl(decl), elseBlock(elseBlock) {}
 
   VarDecl *getDecl() const { return decl; }
+  CompoundStmt *getElseBlock() const { return elseBlock; }
+  bool hasElse() const { return elseBlock != nullptr; }
 
   static bool classof(const Stmt *s) { return s->getKind() == StmtKind::Let; }
 
 private:
   VarDecl *decl;
+  CompoundStmt *elseBlock;
 };
 
 class ConstStmt : public Stmt {
