@@ -35,7 +35,7 @@ struct DriverOptions {
   std::string outputFile;
   std::string targetTriple = "wasm32-wasi-threads";
   EmitKind emitKind = EmitKind::Wasm;
-  OptLevel optLevel = OptLevel::O0;
+  OptLevel optLevel = OptLevel::O2;
   bool debugInfo = false;
   ErrorFormat errorFormat = ErrorFormat::Human;
   bool verbose = false;
