@@ -151,6 +151,22 @@ struct OwnershipLoweringPass
           if (auto *defOp = val.getDefiningOp())
             if (mlir::isa<mlir::LLVM::AllocaOp>(defOp))
               needsFree = false;
+
+          // Check for custom Drop destructor.
+          // Drop methods are emitted as __drop_TypeName by HIRBuilder.
+          if (auto typeNameAttr = op->getAttrOfType<mlir::StringAttr>("type_name")) {
+            std::string dropFnName = "__drop_" + typeNameAttr.getValue().str();
+            auto dropFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(dropFnName);
+            if (!dropFn) {
+              // Also try as func.func (before FuncToLLVM conversion).
+              if (auto funcDropFn = module.lookupSymbol<mlir::func::FuncOp>(dropFnName)) {
+                builder.create<mlir::func::CallOp>(loc, funcDropFn, mlir::ValueRange{val});
+              }
+            } else {
+              builder.create<mlir::LLVM::CallOp>(loc, dropFn, mlir::ValueRange{val});
+            }
+          }
+
           if (needsFree) {
             auto freeFn = getOrInsertFree(module, builder);
             builder.create<mlir::LLVM::CallOp>(loc, freeFn, mlir::ValueRange{val});
