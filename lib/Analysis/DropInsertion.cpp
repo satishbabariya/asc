@@ -10,6 +10,7 @@
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "asc/HIR/OwnTypes.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -96,6 +97,20 @@ void DropInsertionPass::insertDropBefore(mlir::Operation *insertPoint,
   // our custom dialect.
   mlir::OperationState state(loc, "own.drop");
   state.addOperands(value);
+  // Tag with type name for destructor lookup during lowering.
+  // Try to find the type name from the value's defining op.
+  if (auto *defOp = value.getDefiningOp()) {
+    if (auto allocaOp = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp)) {
+      if (auto elemType = allocaOp.getElemType()) {
+        if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(elemType)) {
+          if (structTy.isIdentified()) {
+            state.addAttribute("type_name",
+                mlir::StringAttr::get(builder.getContext(), structTy.getName()));
+          }
+        }
+      }
+    }
+  }
   builder.create(state);
 }
 

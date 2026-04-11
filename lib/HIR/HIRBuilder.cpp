@@ -549,6 +549,21 @@ mlir::Value HIRBuilder::visitImplDecl(ImplDecl *d) {
         clone.setName(mangled);
         module.push_back(clone);
       }
+      // If this is impl Drop for Type, also register as __drop_TypeName
+      // so OwnershipLowering can find the destructor during own.drop lowering.
+      if (d->isTraitImpl() && m->getName() == "drop") {
+        std::string traitName;
+        if (auto *nt = dynamic_cast<NamedType *>(d->getTraitType()))
+          traitName = nt->getName().str();
+        if (traitName == "Drop") {
+          std::string dropName = "__drop_" + typeName;
+          if (auto existing = module.lookupSymbol<mlir::func::FuncOp>(m->getName())) {
+            auto clone = existing.clone();
+            clone.setName(dropName);
+            module.push_back(clone);
+          }
+        }
+      }
     } else {
       visitFunctionDecl(m);
     }
@@ -4190,13 +4205,22 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         auto *entryBlock = wrapperFn.addEntryBlock();
         builder.setInsertionPointToStart(entryBlock);
 
-        // Call the actual closure function (no args — captures via globals).
+        // Call the actual closure function.
         if (!closureFnName.empty()) {
           auto closureCallee = module.lookupSymbol<mlir::func::FuncOp>(closureFnName);
           if (closureCallee) {
             auto cft = closureCallee.getFunctionType();
             if (cft.getNumInputs() == 0) {
               builder.create<mlir::func::CallOp>(location, closureCallee, mlir::ValueRange{});
+            } else if (cft.getNumInputs() == 1) {
+              // Pass the void *arg through to the function.
+              mlir::Value arg = entryBlock->getArgument(0);
+              // If the function expects a non-pointer type, load from the pointer.
+              mlir::Type expectedType = cft.getInput(0);
+              if (expectedType.isIntOrIndexOrFloat()) {
+                arg = builder.create<mlir::LLVM::LoadOp>(location, expectedType, arg);
+              }
+              builder.create<mlir::func::CallOp>(location, closureCallee, mlir::ValueRange{arg});
             }
           }
         }
@@ -4223,11 +4247,41 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
 
         auto wrapperAddr = builder.create<mlir::LLVM::AddressOfOp>(
             location, ptrType, wrapperName);
-        auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
 
-        // pthread_create(&tid, NULL, wrapper, NULL)
+        // If a second argument is provided to task_spawn, pass it as void *arg.
+        mlir::Value threadArg;
+        if (e->getArgs().size() >= 2) {
+          mlir::Value argVal = visitExpr(e->getArgs()[1]);
+          if (argVal) {
+            // If the value is not a pointer, store it to a heap allocation.
+            if (!mlir::isa<mlir::LLVM::LLVMPointerType>(argVal.getType())) {
+              auto mallocFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
+              if (!mallocFn) {
+                mlir::OpBuilder::InsertionGuard guard(builder);
+                builder.setInsertionPointToStart(module.getBody());
+                auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
+                mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "malloc", fnType);
+              }
+              uint64_t argSize = getTypeSize(argVal.getType());
+              if (argSize == 0) argSize = 8;
+              auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+                  location, i64Type, static_cast<int64_t>(argSize));
+              threadArg = builder.create<mlir::LLVM::CallOp>(
+                  location, mallocFn, mlir::ValueRange{sizeConst}).getResult();
+              builder.create<mlir::LLVM::StoreOp>(location, argVal, threadArg);
+            } else {
+              threadArg = argVal;
+            }
+          }
+        }
+        if (!threadArg)
+          threadArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+
+        auto nullAttr = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+
+        // pthread_create(&tid, NULL, wrapper, threadArg)
         builder.create<mlir::LLVM::CallOp>(location, pthreadCreateFn,
-            mlir::ValueRange{tidAlloca, nullArg, wrapperAddr, nullArg});
+            mlir::ValueRange{tidAlloca, nullAttr, wrapperAddr, threadArg});
 
         return tidAlloca; // handle = pointer to thread_id
       }
