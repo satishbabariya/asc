@@ -211,9 +211,10 @@ void MoveCheckPass::checkAllConsumed(mlir::func::FuncOp func,
       // Only warn for function-local values (not parameters that might
       // have been returned).
       if (auto *defOp = val.getDefiningOp()) {
-        defOp->emitWarning()
+        auto diag = defOp->emitWarning()
             << "owned value is never consumed; this is a resource leak. "
             << "Consider dropping it explicitly or returning it.";
+        diag.attachNote() << "RFC-0005 linearity: every !own.val must have exactly one consuming use";
       }
     }
   }
