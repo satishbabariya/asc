@@ -16,8 +16,11 @@
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include <chrono>
+#include <cstdio>
 #include <iostream>
 
 namespace asc {
@@ -182,6 +185,28 @@ ExitCode Driver::runBuild() {
 
   if ((ec = runCodeGen()) != ExitCode::Success) return ec;
   reportStage("codegen");
+
+  // For Wasm targets producing .wasm output, auto-link via wasm-ld.
+  if (opts.emitKind == EmitKind::Wasm) {
+    llvm::Triple triple(opts.targetTriple);
+    std::string outFile = opts.outputFile;
+    if (outFile.empty())
+      outFile = opts.inputFile.substr(0, opts.inputFile.rfind('.')) + ".wasm";
+    if (triple.isWasm() && llvm::StringRef(outFile).ends_with(".wasm")) {
+      // CodeGen wrote a Wasm object file to outFile. Rename it to a temp .o,
+      // then link into the final .wasm executable.
+      std::string objFile = outFile + ".o";
+      if (std::rename(outFile.c_str(), objFile.c_str()) != 0) {
+        llvm::errs() << "error: failed to rename object file for linking\n";
+        return ExitCode::SystemError;
+      }
+      ec = linkWasm(objFile, outFile);
+      // Clean up the temporary object file.
+      std::remove(objFile.c_str());
+      if (ec != ExitCode::Success) return ec;
+      reportStage("link");
+    }
+  }
 
   if (opts.verbose) {
     auto end = std::chrono::steady_clock::now();
@@ -575,6 +600,50 @@ ExitCode Driver::runTransforms() {
 
   if (failed(pm.run(*mlirState->module)))
     return ExitCode::SystemError;
+  return ExitCode::Success;
+}
+
+ExitCode Driver::linkWasm(const std::string &objFile,
+                          const std::string &outFile) {
+  // Find wasm-ld in PATH.
+  auto wasmLdPath = llvm::sys::findProgramByName("wasm-ld");
+  if (!wasmLdPath) {
+    llvm::errs() << "error: wasm-ld not found in PATH; "
+                 << "cannot link Wasm output\n";
+    return ExitCode::SystemError;
+  }
+
+  // Build argument list for wasm-ld.
+  llvm::SmallVector<llvm::StringRef, 8> args;
+  args.push_back(*wasmLdPath);   // argv[0]
+  args.push_back(objFile);
+  args.push_back("-o");
+  args.push_back(outFile);
+  args.push_back("--no-entry");
+  args.push_back("--export-all");
+  args.push_back("--allow-undefined");
+
+  if (opts.verbose) {
+    llvm::errs() << "  [link] ";
+    for (auto &a : args) llvm::errs() << a << " ";
+    llvm::errs() << "\n";
+  }
+
+  std::string errMsg;
+  std::optional<llvm::ArrayRef<llvm::StringRef>> envp = std::nullopt;
+  llvm::ArrayRef<std::optional<llvm::StringRef>> redirects;
+  int rc = llvm::sys::ExecuteAndWait(*wasmLdPath, args, envp, redirects,
+                                     /*SecondsToWait=*/60,
+                                     /*MemoryLimit=*/0,
+                                     &errMsg);
+  if (rc != 0) {
+    llvm::errs() << "error: wasm-ld failed";
+    if (!errMsg.empty())
+      llvm::errs() << ": " << errMsg;
+    llvm::errs() << "\n";
+    return ExitCode::SystemError;
+  }
+
   return ExitCode::Success;
 }
 
