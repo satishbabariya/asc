@@ -232,6 +232,35 @@ void Sema::checkVarDecl(VarDecl *d) {
     } else if (auto *tp = dynamic_cast<TuplePattern *>(d->getPattern())) {
       for (auto *elem : tp->getElements())
         declarePatternBindings(elem);
+    } else if (auto *ep = dynamic_cast<EnumPattern *>(d->getPattern())) {
+      // Bind enum pattern args: let Option::Some(v) = expr
+      const auto &path = ep->getPath();
+      std::vector<Type *> payloadTypes;
+      if (path.size() >= 2 && type) {
+        if (auto *nt = dynamic_cast<NamedType *>(type)) {
+          auto eit = enumDecls.find(nt->getName());
+          if (eit != enumDecls.end()) {
+            for (auto *v : eit->second->getVariants()) {
+              if (v->getName() == path.back() && !v->getTupleTypes().empty()) {
+                payloadTypes = std::vector<Type *>(
+                    v->getTupleTypes().begin(), v->getTupleTypes().end());
+                break;
+              }
+            }
+          }
+        }
+      }
+      for (unsigned i = 0; i < ep->getArgs().size(); ++i) {
+        if (auto *ip = dynamic_cast<IdentPattern *>(ep->getArgs()[i])) {
+          Symbol sym;
+          sym.name = ip->getName().str();
+          sym.decl = d;
+          sym.type = (i < payloadTypes.size()) ? payloadTypes[i] : type;
+          sym.isMutable = !d->isConst();
+          sym.ownership = ownerInfo;
+          currentScope->declare(ip->getName(), std::move(sym));
+        }
+      }
     } else {
       declarePatternBindings(d->getPattern());
     }

@@ -116,8 +116,24 @@ bool Sema::isCompatible(Type *lhs, Type *rhs) {
 
   // Named types compare by name.
   if (auto *ln = dynamic_cast<NamedType *>(lhs)) {
-    if (auto *rn = dynamic_cast<NamedType *>(rhs))
-      return ln->getName() == rn->getName();
+    if (auto *rn = dynamic_cast<NamedType *>(rhs)) {
+      if (ln->getName() == rn->getName())
+        return true;
+      // Check if one is a monomorphization of the other.
+      // "Pair_i32" is compatible with "Pair" if it's in monoCache.
+      llvm::StringRef lname = ln->getName();
+      llvm::StringRef rname = rn->getName();
+      if (monoCache.count(lname) || monoCache.count(rname)) {
+        // Extract base name (before first underscore that starts a type suffix).
+        auto baseName = [](llvm::StringRef n) -> llvm::StringRef {
+          auto pos = n.find('_');
+          return pos != llvm::StringRef::npos ? n.substr(0, pos) : n;
+        };
+        if (baseName(lname) == baseName(rname))
+          return true;
+      }
+      return false;
+    }
     return false;
   }
 
