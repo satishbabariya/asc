@@ -154,10 +154,24 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
 
   // Drop trait: fn drop(refmut<Self>): void
   {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    auto *dropMethod = ctx.create<FunctionDecl>(
+        "drop", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam},
+        ctx.getVoidType(), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem dropItem;
+    dropItem.method = dropMethod;
     auto *dropTrait = ctx.create<TraitDecl>(
         "Drop", std::vector<GenericParam>{},
         std::vector<Type *>{},
-        std::vector<TraitItem>{}, loc);
+        std::vector<TraitItem>{dropItem}, loc);
     traitDecls["Drop"] = dropTrait;
     Symbol sym;
     sym.name = "Drop";
@@ -165,12 +179,26 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Drop", std::move(sym));
   }
 
-  // Clone trait: fn clone(ref<Self>): own<Self>
+  // Clone trait: fn clone(ref<Self>): Self
   {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRef;
+    selfParam.isSelfRef = true;
+    selfParam.loc = loc;
+    auto *cloneMethod = ctx.create<FunctionDecl>(
+        "clone", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem cloneItem;
+    cloneItem.method = cloneMethod;
     auto *cloneTrait = ctx.create<TraitDecl>(
         "Clone", std::vector<GenericParam>{},
         std::vector<Type *>{},
-        std::vector<TraitItem>{}, loc);
+        std::vector<TraitItem>{cloneItem}, loc);
     traitDecls["Clone"] = cloneTrait;
     Symbol sym;
     sym.name = "Clone";
@@ -180,10 +208,29 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
 
   // PartialEq trait: fn eq(ref<Self>, ref<Self>): bool
   {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRef;
+    selfParam.isSelfRef = true;
+    selfParam.loc = loc;
+    ParamDecl otherParam;
+    otherParam.name = "other";
+    otherParam.type = ctx.create<RefType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    otherParam.loc = loc;
+    auto *eqMethod = ctx.create<FunctionDecl>(
+        "eq", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, otherParam},
+        ctx.getBuiltinType(BuiltinTypeKind::Bool), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem eqItem;
+    eqItem.method = eqMethod;
     auto *partialEqTrait = ctx.create<TraitDecl>(
         "PartialEq", std::vector<GenericParam>{},
         std::vector<Type *>{},
-        std::vector<TraitItem>{}, loc);
+        std::vector<TraitItem>{eqItem}, loc);
     traitDecls["PartialEq"] = partialEqTrait;
     Symbol sym;
     sym.name = "PartialEq";
@@ -204,15 +251,36 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Eq", std::move(sym));
   }
 
-  // Iterator trait: fn next(refmut<Self>): Option<T>
+  // Iterator trait: fn next(refmut<Self>): Option<Item>
   {
     GenericParam gp;
     gp.name = "Item";
     gp.loc = loc;
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    auto *itemType = ctx.create<NamedType>("Item", std::vector<Type *>{}, loc);
+    auto *optionRetType = ctx.create<NamedType>(
+        "Option", std::vector<Type *>{itemType}, loc);
+    auto *nextMethod = ctx.create<FunctionDecl>(
+        "next", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam},
+        optionRetType, nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem nextItem;
+    nextItem.method = nextMethod;
+    // Associated type Item
+    TraitItem itemAssoc;
+    itemAssoc.assocTypeName = "Item";
+    itemAssoc.isAssocType = true;
     auto *iterTrait = ctx.create<TraitDecl>(
         "Iterator", std::vector<GenericParam>{gp},
         std::vector<Type *>{},
-        std::vector<TraitItem>{}, loc);
+        std::vector<TraitItem>{itemAssoc, nextItem}, loc);
     traitDecls["Iterator"] = iterTrait;
     Symbol sym;
     sym.name = "Iterator";
@@ -220,12 +288,26 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Iterator", std::move(sym));
   }
 
-  // Display trait: fn fmt(ref<Self>, refmut<Formatter>): void
+  // Display trait: fn display(ref<Self>): String
   {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRef;
+    selfParam.isSelfRef = true;
+    selfParam.loc = loc;
+    auto *displayMethod = ctx.create<FunctionDecl>(
+        "display", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<NamedType>("String", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem displayItem;
+    displayItem.method = displayMethod;
     auto *displayTrait = ctx.create<TraitDecl>(
         "Display", std::vector<GenericParam>{},
         std::vector<Type *>{},
-        std::vector<TraitItem>{}, loc);
+        std::vector<TraitItem>{displayItem}, loc);
     traitDecls["Display"] = displayTrait;
     Symbol sym;
     sym.name = "Display";
@@ -275,10 +357,17 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
 
   // Default trait: fn default(): Self
   {
+    auto *defaultMethod = ctx.create<FunctionDecl>(
+        "default", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem defaultItem;
+    defaultItem.method = defaultMethod;
     auto *defaultTrait = ctx.create<TraitDecl>(
         "Default", std::vector<GenericParam>{},
         std::vector<Type *>{},
-        std::vector<TraitItem>{}, loc);
+        std::vector<TraitItem>{defaultItem}, loc);
     traitDecls["Default"] = defaultTrait;
     Symbol sym;
     sym.name = "Default";

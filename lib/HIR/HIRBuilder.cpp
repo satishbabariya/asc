@@ -2554,6 +2554,47 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return call.getResult();
   }
 
+  // Vec::sort(cmp_fn) → __asc_vec_sort(self, cmp_fn, elem_size)
+  if (methodName == "sort" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+    auto sortFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_sort");
+    if (!sortFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, ptrType, i32Ty});
+      sortFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_sort", fnType);
+    }
+
+    mlir::Value cmpFn = (args.size() > 1) ? args[1] : builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(location, i32Ty, static_cast<int64_t>(4));
+    builder.create<mlir::LLVM::CallOp>(location, sortFn, mlir::ValueRange{receiver, cmpFn, elemSize});
+    return {};
+  }
+
+  // Vec::reverse() → __asc_vec_reverse(self, elem_size)
+  if (methodName == "reverse" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+
+    auto reverseFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_reverse");
+    if (!reverseFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, i32Ty});
+      reverseFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_reverse", fnType);
+    }
+
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(location, i32Ty, static_cast<int64_t>(4));
+    builder.create<mlir::LLVM::CallOp>(location, reverseFn, mlir::ValueRange{receiver, elemSize});
+    return {};
+  }
+
   // HashMap::remove(key) → __asc_hashmap_remove(self, &key)
   if (methodName == "remove" && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
