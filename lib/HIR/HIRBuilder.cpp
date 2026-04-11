@@ -489,6 +489,10 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
     }
 
     // Non-copy owned types: wrap in own.alloc.
+    // RFC-0005: own.copy requires @copy attribute (validated by Sema).
+    // Copy types skip own.alloc and are passed by value; deep copy is
+    // handled by own.copy in OwnershipLowering when aggregate @copy
+    // values are duplicated.
     auto ownerInfo = sema.getVarOwnership(d);
     if (ownerInfo.kind == OwnershipKind::Owned && !ownerInfo.isCopy &&
         !mlir::isa_and_nonnull<own::OwnValType>(init.getType()) &&
@@ -1093,6 +1097,8 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         v = emitBorrowMut(v, location);
       break;
     default:
+      // RFC-0005: own.copy requires @copy attribute (validated by Sema).
+      // TODO: emit own::OwnCopyOp here for @copy aggregate types passed by value.
       break;
     }
     args.push_back(v);
