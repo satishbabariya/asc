@@ -82,6 +82,8 @@ ExitCode Driver::parseArgs(int argc, char **argv) {
         llvm::errs() << "error: unknown optimization level '" << argv[i] << "'\n";
         return ExitCode::UsageError;
       }
+    } else if (arg == "--opt-size") {
+      opts.optLevel = OptLevel::Oz;
     } else if (arg == "--debug") {
       opts.debugInfo = true;
     } else if (arg == "--verbose") {

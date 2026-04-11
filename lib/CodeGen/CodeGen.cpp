@@ -170,8 +170,9 @@ bool CodeGenerator::setupTargetMachine() {
   llvm::Triple triple(opts.targetTriple);
   if (triple.isWasm()) {
     cpu = "generic";
-    // Enable bulk-memory for memcpy, mutable-globals for TLS.
-    features = "+bulk-memory,+mutable-globals,+sign-ext";
+    // Enable bulk-memory for memcpy, mutable-globals for TLS, tail-call for
+    // recursive ownership patterns, sign-ext for integer operations.
+    features = "+bulk-memory,+mutable-globals,+sign-ext,+tail-call";
   }
   // Use O0 for the legacy PM codegen on all targets. Optimization is handled
   // by the new-PM in runLLVMOptPasses(). The legacy PM crashes at O2+ due to
