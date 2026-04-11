@@ -101,6 +101,9 @@ private:
   /// Stage 7: Lower to LLVM and emit output.
   ExitCode runCodeGen();
 
+  /// Stage 8 (Wasm only): Link object file into a .wasm executable via wasm-ld.
+  ExitCode linkWasm(const std::string &objFile, const std::string &outFile);
+
   /// Resolve import declarations by parsing imported files.
   void resolveImports();
 

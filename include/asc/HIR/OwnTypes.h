@@ -37,6 +37,43 @@ struct OwnValTypeStorage : public mlir::TypeStorage {
   bool sendFlag;
   bool syncFlag;
 };
+struct BorrowTypeStorage : public mlir::TypeStorage {
+  using KeyTy = mlir::Type;
+
+  BorrowTypeStorage(mlir::Type innerType) : innerType(innerType) {}
+
+  bool operator==(const KeyTy &key) const { return key == innerType; }
+
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    return llvm::hash_combine(key.getAsOpaquePointer());
+  }
+
+  static BorrowTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                       const KeyTy &key) {
+    return new (allocator.allocate<BorrowTypeStorage>()) BorrowTypeStorage(key);
+  }
+
+  mlir::Type innerType;
+};
+
+struct BorrowMutTypeStorage : public mlir::TypeStorage {
+  using KeyTy = mlir::Type;
+
+  BorrowMutTypeStorage(mlir::Type innerType) : innerType(innerType) {}
+
+  bool operator==(const KeyTy &key) const { return key == innerType; }
+
+  static llvm::hash_code hashKey(const KeyTy &key) {
+    return llvm::hash_combine(key.getAsOpaquePointer());
+  }
+
+  static BorrowMutTypeStorage *construct(mlir::TypeStorageAllocator &allocator,
+                                          const KeyTy &key) {
+    return new (allocator.allocate<BorrowMutTypeStorage>()) BorrowMutTypeStorage(key);
+  }
+
+  mlir::Type innerType;
+};
 } // namespace detail
 
 /// OwnValType: !own.val<T> — an owned value.
@@ -58,31 +95,31 @@ public:
 
 /// BorrowType: !own.borrow<T> — a shared borrow.
 class BorrowType : public mlir::Type::TypeBase<BorrowType, mlir::Type,
-                                                mlir::TypeStorage> {
+                                                detail::BorrowTypeStorage> {
 public:
   using Base::Base;
   static constexpr llvm::StringLiteral name = "own.borrow";
 
   static BorrowType get(mlir::MLIRContext *ctx, mlir::Type innerType = {}) {
-    return Base::get(ctx);
+    return Base::get(ctx, innerType);
   }
 
-  mlir::Type getInnerType() const { return mlir::Type(); }
+  mlir::Type getInnerType() const { return getImpl()->innerType; }
 };
 
 /// BorrowMutType: !own.borrow_mut<T> — an exclusive mutable borrow.
 class BorrowMutType : public mlir::Type::TypeBase<BorrowMutType, mlir::Type,
-                                                   mlir::TypeStorage> {
+                                                   detail::BorrowMutTypeStorage> {
 public:
   using Base::Base;
   static constexpr llvm::StringLiteral name = "own.borrow_mut";
 
   static BorrowMutType get(mlir::MLIRContext *ctx,
                             mlir::Type innerType = {}) {
-    return Base::get(ctx);
+    return Base::get(ctx, innerType);
   }
 
-  mlir::Type getInnerType() const { return mlir::Type(); }
+  mlir::Type getInnerType() const { return getImpl()->innerType; }
 };
 
 } // namespace own
