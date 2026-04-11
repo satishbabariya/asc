@@ -455,13 +455,37 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
     if (!d->isConst() && (init.getType().isIntOrIndexOrFloat() ||
         mlir::isa<mlir::LLVM::LLVMPointerType>(init.getType()))) {
       auto ptrType = getPtrType();
-      auto i64One = builder.create<mlir::LLVM::ConstantOp>(
-          location, builder.getIntegerType(64), static_cast<int64_t>(1));
-      auto alloca = builder.create<mlir::LLVM::AllocaOp>(
-          location, ptrType, init.getType(), i64One);
-      builder.create<mlir::LLVM::StoreOp>(location, init, alloca);
-      declare(d->getName(), alloca);
-      return alloca;
+      auto i64Type = builder.getIntegerType(64);
+
+      // Check for @heap attribute — force heap allocation via malloc.
+      bool forceHeap = false;
+      for (const auto &attr : d->getAttributes()) {
+        if (attr == "@heap") { forceHeap = true; break; }
+      }
+
+      mlir::Value storage;
+      if (forceHeap) {
+        uint64_t size = getTypeSize(init.getType());
+        if (size == 0) size = 8;
+        auto mallocFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
+        if (!mallocFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
+          mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "malloc", fnType);
+        }
+        auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(location, i64Type, (int64_t)size);
+        storage = builder.create<mlir::LLVM::CallOp>(
+            location, mallocFn, mlir::ValueRange{sizeVal}).getResult();
+      } else {
+        auto i64One = builder.create<mlir::LLVM::ConstantOp>(location, i64Type, (int64_t)1);
+        storage = builder.create<mlir::LLVM::AllocaOp>(
+            location, ptrType, init.getType(), i64One).getResult();
+      }
+
+      builder.create<mlir::LLVM::StoreOp>(location, init, storage);
+      declare(d->getName(), storage);
+      return storage;
     }
 
     // Non-copy owned types: wrap in own.alloc.
@@ -471,7 +495,15 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
         !mlir::isa<mlir::LLVM::LLVMPointerType>(init.getType())) {
       auto ownType = own::OwnValType::get(&mlirCtx, init.getType(),
                                            ownerInfo.isSend, ownerInfo.isSync);
-      init = builder.create<own::OwnAllocOp>(location, ownType, init).getResult();
+      auto allocOp = builder.create<own::OwnAllocOp>(location, ownType, init);
+      // @heap attribute forces heap allocation via malloc.
+      bool forceHeap = false;
+      for (const auto &attr : d->getAttributes()) {
+        if (attr == "@heap") { forceHeap = true; break; }
+      }
+      if (forceHeap)
+        allocOp->setAttr("heap", mlir::UnitAttr::get(&mlirCtx));
+      init = allocOp.getResult();
     }
     declare(d->getName(), init);
   }

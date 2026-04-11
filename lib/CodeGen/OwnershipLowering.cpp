@@ -75,13 +75,27 @@ struct OwnershipLoweringPass
         uint64_t size = 8;
         if (auto sizeAttr = op->getAttrOfType<mlir::IntegerAttr>("size"))
           size = sizeAttr.getUInt();
-        // Stack allocation by default.
-        auto i8Ty = mlir::IntegerType::get(ctx, 8);
-        auto arrayTy = mlir::LLVM::LLVMArrayType::get(i8Ty, size);
-        auto one = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)1);
-        auto alloca = builder.create<mlir::LLVM::AllocaOp>(loc, ptrType, arrayTy, one);
+
+        bool useHeap = op->hasAttr("heap");
+        mlir::Value result;
+
+        if (useHeap) {
+          // @heap: allocate on heap via malloc.
+          auto mallocFn = getOrInsertMalloc(module, builder);
+          auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)size);
+          auto callOp = builder.create<mlir::LLVM::CallOp>(loc, mallocFn, mlir::ValueRange{sizeVal});
+          result = callOp.getResult();
+        } else {
+          // Stack allocation by default.
+          auto i8Ty = mlir::IntegerType::get(ctx, 8);
+          auto arrayTy = mlir::LLVM::LLVMArrayType::get(i8Ty, size);
+          auto one = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)1);
+          auto alloca = builder.create<mlir::LLVM::AllocaOp>(loc, ptrType, arrayTy, one);
+          result = alloca.getResult();
+        }
+
         if (op->getNumResults() > 0)
-          op->getResult(0).replaceAllUsesWith(alloca.getResult());
+          op->getResult(0).replaceAllUsesWith(result);
         op->erase();
       } else if (name == "own.move") {
         if (op->getNumOperands() > 0 && op->getNumResults() > 0) {

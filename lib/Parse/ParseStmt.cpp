@@ -38,9 +38,30 @@ CompoundStmt *Parser::parseBlock() {
 Stmt *Parser::parseStmt() {
   SourceLocation loc = tok.getLocation();
 
+  // Attributes before let/const: @heap let x = ...
+  std::vector<std::string> stmtAttrs;
+  while (tok.is(tok::attribute)) {
+    stmtAttrs.push_back(tok.getSpelling().str());
+    advance();
+  }
+
   // Let/const bindings.
-  if (tok.is(tok::kw_let) || tok.is(tok::kw_const))
-    return parseLetOrConstStmt();
+  if (tok.is(tok::kw_let) || tok.is(tok::kw_const)) {
+    Stmt *letStmt = parseLetOrConstStmt();
+    // Apply attributes to the VarDecl.
+    if (letStmt && !stmtAttrs.empty()) {
+      VarDecl *decl = nullptr;
+      if (auto *ls = dynamic_cast<LetStmt *>(letStmt))
+        decl = ls->getDecl();
+      else if (auto *cs = dynamic_cast<ConstStmt *>(letStmt))
+        decl = cs->getDecl();
+      if (decl) {
+        for (auto &a : stmtAttrs)
+          decl->addAttribute(std::move(a));
+      }
+    }
+    return letStmt;
+  }
 
   // Return statement.
   if (tok.is(tok::kw_return)) {
