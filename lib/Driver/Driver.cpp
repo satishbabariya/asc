@@ -441,14 +441,81 @@ ExitCode Driver::runLsp() {
         return ExitCode::Success;
       }
 
-      // Handle textDocument/didOpen — run check and publish diagnostics.
+      // Handle textDocument/didOpen — run check and publish real diagnostics.
       if (body.find("\"textDocument/didOpen\"") != std::string::npos) {
-        // DECISION: For now, publish empty diagnostics.
-        // Full integration would parse the document URI, run sema,
-        // and return real diagnostics.
+        // Extract document URI from the JSON body.
+        std::string uri;
+        auto uriPos = body.find("\"uri\"");
+        if (uriPos != std::string::npos) {
+          auto start = body.find('"', uriPos + 5) + 1;
+          auto end = body.find('"', start);
+          if (start != std::string::npos && end != std::string::npos)
+            uri = body.substr(start, end - start);
+        }
+
+        // Convert file:// URI to path.
+        std::string filePath = uri;
+        if (filePath.starts_with("file://"))
+          filePath = filePath.substr(7);
+
+        // Run the check pipeline on this file and collect diagnostics.
+        std::string diagJson = "[]";
+        if (!filePath.empty() && llvm::sys::fs::exists(filePath)) {
+          SourceManager lspSM;
+          auto lspDiags = std::make_unique<DiagnosticEngine>(lspSM);
+          // Suppress rendering to stderr — we collect diagnostics programmatically.
+          llvm::raw_null_ostream nullStream;
+          lspDiags->setOutputStream(nullStream);
+
+          auto fileID = lspSM.loadFile(filePath);
+          if (fileID.isValid()) {
+            Lexer lexer(fileID, lspSM, *lspDiags);
+            ASTContext lspCtx;
+            Parser parser(lexer, lspCtx, *lspDiags);
+            auto decls = parser.parseProgram();
+
+            if (!decls.empty() && !lspDiags->hasErrors()) {
+              Sema sema(lspCtx, *lspDiags);
+              sema.analyze(decls);
+            }
+
+            // Convert collected diagnostics to LSP JSON.
+            const auto &diags_list = lspDiags->getDiagnostics();
+            if (!diags_list.empty()) {
+              diagJson = "[";
+              bool first = true;
+              for (const auto &d : diags_list) {
+                if (!first) diagJson += ",";
+                first = false;
+                auto lc = lspSM.getLineAndColumn(d.location);
+                unsigned line = lc.line > 0 ? lc.line - 1 : 0;
+                unsigned col = lc.column > 0 ? lc.column - 1 : 0;
+                int severity = (d.severity == DiagnosticSeverity::Error) ? 1
+                             : (d.severity == DiagnosticSeverity::Warning) ? 2
+                             : 3;
+                // Escape quotes in message for JSON.
+                std::string msg;
+                for (char c : d.message) {
+                  if (c == '"') msg += "\\\"";
+                  else if (c == '\\') msg += "\\\\";
+                  else msg += c;
+                }
+                diagJson += "{\"range\":{\"start\":{\"line\":" +
+                    std::to_string(line) + ",\"character\":" +
+                    std::to_string(col) + "},\"end\":{\"line\":" +
+                    std::to_string(line) + ",\"character\":" +
+                    std::to_string(col + 1) + "}},\"severity\":" +
+                    std::to_string(severity) + ",\"source\":\"asc\",\"message\":\"" +
+                    msg + "\"}";
+              }
+              diagJson += "]";
+            }
+          }
+        }
+
         std::string notification =
             R"({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics",)"
-            R"("params":{"uri":"","diagnostics":[]}})";
+            R"("params":{"uri":")" + uri + R"(","diagnostics":)" + diagJson + "}}";
         llvm::outs() << "Content-Length: " << notification.size()
                      << "\r\n\r\n" << notification;
         llvm::outs().flush();
