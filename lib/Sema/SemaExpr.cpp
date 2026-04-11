@@ -1203,8 +1203,25 @@ Type *Sema::checkAssignExpr(AssignExpr *e) {
   }
 
   if (targetType && valueType && !isCompatible(targetType, valueType)) {
-    diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
-                    "assignment type mismatch");
+    // Allow assigning enum variants to their parent enum type.
+    // e.g., x: Option_i32 = Option::None (None resolves as base "Option")
+    bool isEnumVariantAssign = false;
+    if (auto *tn = dynamic_cast<NamedType *>(targetType)) {
+      if (auto *vn = dynamic_cast<NamedType *>(valueType)) {
+        llvm::StringRef tname = tn->getName();
+        llvm::StringRef vname = vn->getName();
+        if (tname.starts_with(vname) && tname.size() > vname.size() &&
+            tname[vname.size()] == '_')
+          isEnumVariantAssign = true;
+        if (vname.starts_with(tname) && vname.size() > tname.size() &&
+            vname[tname.size()] == '_')
+          isEnumVariantAssign = true;
+      }
+    }
+    if (!isEnumVariantAssign) {
+      diags.emitError(e->getLocation(), DiagID::ErrTypeMismatch,
+                      "assignment type mismatch");
+    }
   }
 
   return ctx.getVoidType();

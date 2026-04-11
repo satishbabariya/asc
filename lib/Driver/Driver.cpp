@@ -613,14 +613,53 @@ ExitCode Driver::linkWasm(const std::string &objFile,
     return ExitCode::SystemError;
   }
 
+  // Compile the runtime to a temp object file if clang and runtime.c are found.
+  std::string runtimeObj;
+  auto clangPath = llvm::sys::findProgramByName("clang");
+  if (clangPath) {
+    // Look for runtime.c in common locations relative to the working directory.
+    std::string runtimeSrc;
+    for (const char *p : {"lib/Runtime/runtime.c",
+                          "../lib/Runtime/runtime.c",
+                          "../../lib/Runtime/runtime.c"}) {
+      if (llvm::sys::fs::exists(p)) { runtimeSrc = p; break; }
+    }
+    if (!runtimeSrc.empty()) {
+      runtimeObj = outFile + ".rt.o";
+      llvm::SmallVector<llvm::StringRef, 8> clangArgs;
+      clangArgs.push_back(*clangPath);
+      clangArgs.push_back("--target=wasm32-wasi");
+      clangArgs.push_back("-c");
+      clangArgs.push_back(runtimeSrc);
+      clangArgs.push_back("-o");
+      clangArgs.push_back(runtimeObj);
+      std::string clangErr;
+      int clangRc = llvm::sys::ExecuteAndWait(
+          *clangPath, clangArgs, std::nullopt, {}, 60, 0, &clangErr);
+      if (clangRc != 0) {
+        if (opts.verbose)
+          llvm::errs() << "  [warn] failed to compile runtime: " << clangErr << "\n";
+        runtimeObj.clear();
+      }
+    }
+  }
+
   // Build argument list for wasm-ld.
-  llvm::SmallVector<llvm::StringRef, 8> args;
-  args.push_back(*wasmLdPath);   // argv[0]
+  llvm::SmallVector<llvm::StringRef, 12> args;
+  args.push_back(*wasmLdPath);
   args.push_back(objFile);
+  if (!runtimeObj.empty())
+    args.push_back(runtimeObj);
   args.push_back("-o");
   args.push_back(outFile);
-  args.push_back("--no-entry");
-  args.push_back("--export-all");
+  // Use --export=_start when runtime is linked (provides _start entry).
+  // Fall back to --no-entry --export-all when no runtime.
+  if (!runtimeObj.empty()) {
+    args.push_back("--export=_start");
+  } else {
+    args.push_back("--no-entry");
+    args.push_back("--export-all");
+  }
   args.push_back("--allow-undefined");
 
   if (opts.verbose) {
@@ -630,12 +669,13 @@ ExitCode Driver::linkWasm(const std::string &objFile,
   }
 
   std::string errMsg;
-  std::optional<llvm::ArrayRef<llvm::StringRef>> envp = std::nullopt;
-  llvm::ArrayRef<std::optional<llvm::StringRef>> redirects;
-  int rc = llvm::sys::ExecuteAndWait(*wasmLdPath, args, envp, redirects,
-                                     /*SecondsToWait=*/60,
-                                     /*MemoryLimit=*/0,
-                                     &errMsg);
+  int rc = llvm::sys::ExecuteAndWait(*wasmLdPath, args,
+                                     std::nullopt, {}, 60, 0, &errMsg);
+
+  // Clean up runtime temp object.
+  if (!runtimeObj.empty())
+    std::remove(runtimeObj.c_str());
+
   if (rc != 0) {
     llvm::errs() << "error: wasm-ld failed";
     if (!errMsg.empty())
