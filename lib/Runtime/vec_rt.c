@@ -102,6 +102,45 @@ void __asc_vec_filter(AscVec *v, int (*fn)(const void *),
   }
 }
 
+// Sort: in-place sort using a comparison callback.
+// callback signature: int (*cmp)(const void *a, const void *b)
+// Returns negative if a < b, 0 if equal, positive if a > b.
+void __asc_vec_sort(AscVec *v, int (*cmp)(const void *, const void *),
+                    unsigned int elem_size) {
+  if (!v || v->len <= 1) return;
+  // Simple insertion sort (good enough for small vecs).
+  for (unsigned long i = 1; i < v->len; i++) {
+    unsigned long j = i;
+    while (j > 0) {
+      char *a = v->ptr + (j - 1) * elem_size;
+      char *b = v->ptr + j * elem_size;
+      if (cmp(a, b) > 0) {
+        // Swap a and b.
+        for (unsigned int k = 0; k < elem_size; k++) {
+          char tmp = a[k]; a[k] = b[k]; b[k] = tmp;
+        }
+        j--;
+      } else {
+        break;
+      }
+    }
+  }
+}
+
+// Reverse: reverse vec in place.
+void __asc_vec_reverse(AscVec *v, unsigned int elem_size) {
+  if (!v || v->len <= 1) return;
+  unsigned long lo = 0, hi = v->len - 1;
+  while (lo < hi) {
+    char *a = v->ptr + lo * elem_size;
+    char *b = v->ptr + hi * elem_size;
+    for (unsigned int k = 0; k < elem_size; k++) {
+      char tmp = a[k]; a[k] = b[k]; b[k] = tmp;
+    }
+    lo++; hi--;
+  }
+}
+
 // Free a vec and its data.
 void __asc_vec_free(AscVec *v) {
   if (v) {
