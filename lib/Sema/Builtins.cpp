@@ -188,6 +188,40 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Weak", std::move(sym));
   }
 
+  // --- Mutex ---
+  // Opaque handle: { state: u32 }
+  {
+    auto *stateField = ctx.create<FieldDecl>(
+        "state", ctx.getBuiltinType(BuiltinTypeKind::U32), loc);
+    auto *mutexStruct = ctx.create<StructDecl>(
+        "Mutex", std::vector<GenericParam>{},
+        std::vector<FieldDecl *>{stateField}, loc);
+    structDecls["Mutex"] = mutexStruct;
+
+    Symbol sym;
+    sym.name = "Mutex";
+    sym.decl = mutexStruct;
+    scope->declare("Mutex", std::move(sym));
+  }
+
+  // --- RwLock ---
+  // Opaque handle: { readers: i32, writer: i32 }
+  {
+    auto *readersField = ctx.create<FieldDecl>(
+        "readers", ctx.getBuiltinType(BuiltinTypeKind::I32), loc);
+    auto *writerField = ctx.create<FieldDecl>(
+        "writer", ctx.getBuiltinType(BuiltinTypeKind::I32), loc);
+    auto *rwlockStruct = ctx.create<StructDecl>(
+        "RwLock", std::vector<GenericParam>{},
+        std::vector<FieldDecl *>{readersField, writerField}, loc);
+    structDecls["RwLock"] = rwlockStruct;
+
+    Symbol sym;
+    sym.name = "RwLock";
+    sym.decl = rwlockStruct;
+    scope->declare("RwLock", std::move(sym));
+  }
+
   // --- Core Traits ---
 
   // Drop trait: fn drop(refmut<Self>): void

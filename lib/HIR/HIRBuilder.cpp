@@ -1289,6 +1289,20 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         location, semNewFn, mlir::ValueRange{permits}).getResult();
   }
 
+  // RwLock::new() — create readers-writer lock.
+  if (calleeName == "RwLock_new" || calleeName == "RwLock::new") {
+    auto ptrType = getPtrType();
+    auto rwNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_rwlock_new");
+    if (!rwNewFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {});
+      rwNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_rwlock_new", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, rwNewFn, mlir::ValueRange{}).getResult();
+  }
+
   // Box::new(value) — heap allocation.
   if (calleeName == "Box_new" || calleeName == "Box::new") {
     if (!args.empty()) {
@@ -2708,6 +2722,43 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return {};
   }
 
+  // Vec::dedup() → __asc_vec_dedup(self, elem_size)
+  if (methodName == "dedup" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_dedup");
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, i32Ty});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_dedup", fnType);
+    }
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(location, i32Ty, static_cast<int64_t>(4));
+    builder.create<mlir::LLVM::CallOp>(location, fn, mlir::ValueRange{receiver, elemSize});
+    return {};
+  }
+
+  // Vec::extend(other) → __asc_vec_extend(self, other, elem_size)
+  if (methodName == "extend" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_extend");
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType, ptrType, i32Ty});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_vec_extend", fnType);
+    }
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(location, i32Ty, static_cast<int64_t>(4));
+    builder.create<mlir::LLVM::CallOp>(location, fn, mlir::ValueRange{receiver, args[1], elemSize});
+    return {};
+  }
+
   // HashMap::remove(key) → __asc_hashmap_remove(self, &key)
   if (methodName == "remove" && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
@@ -2787,6 +2838,45 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     }
     return builder.create<mlir::LLVM::CallOp>(
         location, valuesFn, mlir::ValueRange{receiver}).getResult();
+  }
+
+  // HashMap::clear() → __asc_hashmap_clear(self)
+  if (methodName == "clear" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    // Note: Vec::clear is handled earlier. This catches HashMap::clear for
+    // cases where the receiver is known to be a HashMap (both use ptr type).
+    auto ptrType = getPtrType();
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    auto clearFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_clear");
+    if (!clearFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      clearFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_hashmap_clear", fnType);
+    }
+    builder.create<mlir::LLVM::CallOp>(
+        location, clearFn, mlir::ValueRange{receiver});
+    return {};
+  }
+
+  // HashMap::is_empty() → __asc_hashmap_is_empty(self)
+  if (methodName == "is_empty" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    // Note: Vec::is_empty is handled earlier. This catches HashMap::is_empty.
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto isEmptyFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_is_empty");
+    if (!isEmptyFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrType});
+      isEmptyFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_hashmap_is_empty", fnType);
+    }
+    auto result = builder.create<mlir::LLVM::CallOp>(
+        location, isEmptyFn, mlir::ValueRange{receiver});
+    return result.getResult();
   }
 
   // String::as_ptr() or String::as_str() → __asc_string_as_ptr(self)
@@ -3061,6 +3151,25 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
         location, fn, mlir::ValueRange{receiver});
     bool returnsVal = (methodName == "try_acquire" || methodName == "available_permits");
     return returnsVal ? result.getResult() : mlir::Value{};
+  }
+
+  // RwLock methods: .read_lock(), .read_unlock(), .write_lock(), .write_unlock()
+  if ((methodName == "read_lock" || methodName == "read_unlock" ||
+       methodName == "write_lock" || methodName == "write_unlock") &&
+      receiver && mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
+    std::string fnName = "__asc_rwlock_" + methodName;
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(fnName);
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, fnName, fnType);
+    }
+    builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver});
+    return {};
   }
 
   // Channel methods: .send(value) and .recv() — single-threaded stubs.
