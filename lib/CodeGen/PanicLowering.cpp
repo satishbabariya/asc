@@ -65,18 +65,29 @@ struct PanicLoweringPass
     };
     llvm::SmallVector<FuncScopeInfo, 4> funcScopes;
 
-    module.walk([&](mlir::func::FuncOp funcOp) {
-      if (funcOp.isDeclaration()) return;
-      FuncScopeInfo info;
-      info.func = funcOp;
-      funcOp.walk([&](mlir::Operation *op) {
-        llvm::StringRef name = op->getName().getStringRef();
-        if (name == "own.try_scope") info.tryOp = op;
-        else if (name == "own.catch_scope" || name == "own.cleanup_scope")
-          info.cleanupOp = op;
-      });
-      if (info.tryOp) funcScopes.push_back(info);
-    });
+    // Scan module-level ops. PanicScopeWrap places try_scope/catch_scope
+    // before the function they wrap. Collect pending scope ops and
+    // associate with the next function encountered.
+    mlir::Operation *pendingTry = nullptr;
+    mlir::Operation *pendingCleanup = nullptr;
+    for (auto &op : module.getBody()->getOperations()) {
+      llvm::StringRef name = op.getName().getStringRef();
+      if (name == "own.try_scope") {
+        pendingTry = &op;
+      } else if (name == "own.catch_scope" || name == "own.cleanup_scope") {
+        pendingCleanup = &op;
+      } else if (auto funcOp = mlir::dyn_cast<mlir::func::FuncOp>(&op)) {
+        if (!funcOp.isDeclaration() && (pendingTry || pendingCleanup)) {
+          FuncScopeInfo info;
+          info.func = funcOp;
+          info.tryOp = pendingTry;
+          info.cleanupOp = pendingCleanup;
+          funcScopes.push_back(info);
+          pendingTry = nullptr;
+          pendingCleanup = nullptr;
+        }
+      }
+    }
 
     if (funcScopes.empty()) return;
 
@@ -86,8 +97,17 @@ struct PanicLoweringPass
       auto loc = funcOp.getLoc();
       mlir::Block &entryBlock = funcOp.getBody().front();
 
-      // Insert setjmp setup at the beginning of the function.
-      builder.setInsertionPointToStart(&entryBlock);
+      // Insert setjmp setup after all allocas in the entry block.
+      // This ensures alloca values dominate both the normal and cleanup paths.
+      mlir::Operation *lastAlloca = nullptr;
+      for (auto &op : entryBlock.getOperations()) {
+        if (mlir::isa<mlir::LLVM::AllocaOp>(op))
+          lastAlloca = &op;
+      }
+      if (lastAlloca)
+        builder.setInsertionPointAfter(lastAlloca);
+      else
+        builder.setInsertionPointToStart(&entryBlock);
 
       // 1. Alloca jmp_buf (256 bytes).
       auto i8Ty = mlir::IntegerType::get(ctx, 8);
@@ -124,8 +144,36 @@ struct PanicLoweringPass
       builder.create<mlir::LLVM::CondBrOp>(
           loc, isPanic, cleanupBlock, normalBlock);
 
-      // 8. Build cleanup block: clear handler + abort.
+      // 8. Collect struct allocas that need drop calls on panic.
+      struct DropTarget {
+        mlir::Value ptr;
+        std::string dropName;
+      };
+      llvm::SmallVector<DropTarget, 4> dropTargets;
+      for (auto &block : funcOp.getBody()) {
+        for (auto &op : block) {
+          auto allocaOp = mlir::dyn_cast<mlir::LLVM::AllocaOp>(&op);
+          if (!allocaOp) continue;
+          auto elemType = allocaOp.getElemType();
+          if (!elemType) continue;
+          auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(elemType);
+          if (!structTy || !structTy.isIdentified()) continue;
+          std::string dropName = "__drop_" + structTy.getName().str();
+          if (module.lookupSymbol<mlir::func::FuncOp>(dropName))
+            dropTargets.push_back({allocaOp.getResult(), dropName});
+        }
+      }
+
+      // Build cleanup block: run destructors, then clear handler + abort.
       builder.setInsertionPointToStart(cleanupBlock);
+
+      for (auto &dt : dropTargets) {
+        auto dropFn = module.lookupSymbol<mlir::func::FuncOp>(dt.dropName);
+        if (dropFn)
+          builder.create<mlir::func::CallOp>(loc, dropFn,
+              mlir::ValueRange{dt.ptr});
+      }
+
       builder.create<mlir::LLVM::CallOp>(loc, clearHandlerFn,
           mlir::ValueRange{});
       builder.create<mlir::LLVM::CallOp>(loc, abortFn, mlir::ValueRange{});
