@@ -1350,6 +1350,38 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
     return {};
   }
 
+  // Rc::new(value) — allocate with refcount 1.
+  if (calleeName == "Rc_new" || calleeName == "Rc::new") {
+    if (!args.empty()) {
+      auto ptrType = getPtrType();
+      auto i32Type = builder.getIntegerType(32);
+      mlir::Value val = args[0];
+      uint64_t size = getTypeSize(val.getType());
+      if (size == 0) size = 4;
+
+      auto rcNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_rc_new");
+      if (!rcNewFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, i32Type});
+        rcNewFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_rc_new", fnType);
+      }
+
+      // Store value to temp, pass address.
+      auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+          location, builder.getIntegerType(64), static_cast<int64_t>(1));
+      auto valAlloca = builder.create<mlir::LLVM::AllocaOp>(
+          location, ptrType, val.getType(), i64One);
+      builder.create<mlir::LLVM::StoreOp>(location, val, valAlloca);
+      auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+          location, i32Type, static_cast<int64_t>(size));
+
+      return builder.create<mlir::LLVM::CallOp>(
+          location, rcNewFn, mlir::ValueRange{valAlloca, sizeConst}).getResult();
+    }
+    return {};
+  }
+
   // Generic function monomorphization: if callee is generic, emit a
   // specialized version with concrete types substituted for type parameters.
   if (auto *ref = dynamic_cast<DeclRefExpr *>(e->getCallee())) {

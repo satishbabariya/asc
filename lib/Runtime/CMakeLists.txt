@@ -15,6 +15,7 @@ if(CMAKE_C_COMPILER)
     string_rt.c
     vec_rt.c
     arc_rt.c
+    rc_rt.c
   )
   target_compile_options(ascRuntime PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
