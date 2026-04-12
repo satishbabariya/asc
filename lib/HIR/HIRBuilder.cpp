@@ -1412,13 +1412,8 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
     // Simplified: return the fd as i32. Full impl would create a File struct.
     // For now, just declare the function so File::open compiles.
     if (!args.empty()) {
-      auto dirfd = builder.create<mlir::LLVM::ConstantOp>(location, i32Type, static_cast<int64_t>(3));
+      // Placeholder: return 0 fd. Full impl needs string → path resolution.
       auto zero = builder.create<mlir::LLVM::ConstantOp>(location, i32Type, static_cast<int64_t>(0));
-      auto i64One = builder.create<mlir::LLVM::ConstantOp>(
-          location, builder.getIntegerType(64), static_cast<int64_t>(1));
-      auto fdAlloca = builder.create<mlir::LLVM::AllocaOp>(
-          location, ptrType, i32Type, i64One);
-      // For now return 0 (placeholder — full path resolution needs string handling)
       return zero;
     }
     return {};
