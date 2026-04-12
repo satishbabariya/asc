@@ -141,6 +141,32 @@ void __asc_vec_reverse(AscVec *v, unsigned int elem_size) {
   }
 }
 
+// Create a vec with pre-allocated capacity.
+AscVec *__asc_vec_with_capacity(unsigned int elem_size, unsigned long capacity) {
+  AscVec *v = (AscVec *)malloc(sizeof(AscVec));
+  v->ptr = capacity > 0 ? (char *)malloc(capacity * elem_size) : 0;
+  v->len = 0;
+  v->cap = capacity;
+  (void)elem_size;
+  return v;
+}
+
+// Retain only elements for which the callback returns true (in-place filter).
+// callback signature: int (*fn)(const void *element)
+void __asc_vec_retain(AscVec *v, int (*fn)(const void *),
+                      unsigned int elem_size) {
+  if (!v) return;
+  unsigned long write = 0;
+  for (unsigned long read = 0; read < v->len; read++) {
+    if (fn(v->ptr + read * elem_size)) {
+      if (write != read)
+        memcpy(v->ptr + write * elem_size, v->ptr + read * elem_size, elem_size);
+      write++;
+    }
+  }
+  v->len = write;
+}
+
 // Free a vec and its data.
 void __asc_vec_free(AscVec *v) {
   if (v) {

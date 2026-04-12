@@ -158,6 +158,75 @@ unsigned int __asc_string_char_at(AscString *s, unsigned long index) {
   return (unsigned char)s->ptr[index];
 }
 
+// Check if string starts with prefix (takes AscString* for both).
+int __asc_string_starts_with_str(AscString *s, AscString *prefix) {
+  if (!s || !prefix || s->len < prefix->len) return 0;
+  for (unsigned long i = 0; i < prefix->len; i++)
+    if (s->ptr[i] != prefix->ptr[i]) return 0;
+  return 1;
+}
+
+// Check if string ends with suffix (takes AscString* for both).
+int __asc_string_ends_with_str(AscString *s, AscString *suffix) {
+  if (!s || !suffix || s->len < suffix->len) return 0;
+  unsigned long offset = s->len - suffix->len;
+  for (unsigned long i = 0; i < suffix->len; i++)
+    if (s->ptr[offset + i] != suffix->ptr[i]) return 0;
+  return 1;
+}
+
+// Check if string contains substring (takes AscString* for both).
+int __asc_string_contains_str(AscString *s, AscString *needle) {
+  if (!s || !needle || s->len < needle->len) return 0;
+  if (needle->len == 0) return 1;
+  for (unsigned long i = 0; i <= s->len - needle->len; i++) {
+    int match = 1;
+    for (unsigned long j = 0; j < needle->len; j++) {
+      if (s->ptr[i + j] != needle->ptr[j]) { match = 0; break; }
+    }
+    if (match) return 1;
+  }
+  return 0;
+}
+
+// Convert string to uppercase (ASCII only). Returns a new string.
+AscString *__asc_string_to_uppercase(AscString *s) {
+  if (!s || !s->ptr || s->len == 0) {
+    AscString *r = (AscString *)malloc(sizeof(AscString));
+    r->ptr = 0; r->len = 0; r->cap = 0;
+    return r;
+  }
+  AscString *r = (AscString *)malloc(sizeof(AscString));
+  r->ptr = (char *)malloc(s->len + 1);
+  r->len = s->len;
+  r->cap = s->len + 1;
+  memcpy(r->ptr, s->ptr, s->len);
+  for (unsigned long i = 0; i < r->len; i++)
+    if (r->ptr[i] >= 'a' && r->ptr[i] <= 'z')
+      r->ptr[i] -= 32;
+  r->ptr[r->len] = '\0';
+  return r;
+}
+
+// Convert string to lowercase (ASCII only). Returns a new string.
+AscString *__asc_string_to_lowercase(AscString *s) {
+  if (!s || !s->ptr || s->len == 0) {
+    AscString *r = (AscString *)malloc(sizeof(AscString));
+    r->ptr = 0; r->len = 0; r->cap = 0;
+    return r;
+  }
+  AscString *r = (AscString *)malloc(sizeof(AscString));
+  r->ptr = (char *)malloc(s->len + 1);
+  r->len = s->len;
+  r->cap = s->len + 1;
+  memcpy(r->ptr, s->ptr, s->len);
+  for (unsigned long i = 0; i < r->len; i++)
+    if (r->ptr[i] >= 'A' && r->ptr[i] <= 'Z')
+      r->ptr[i] += 32;
+  r->ptr[r->len] = '\0';
+  return r;
+}
+
 // Free a string.
 void __asc_string_free(AscString *s) {
   if (s) {

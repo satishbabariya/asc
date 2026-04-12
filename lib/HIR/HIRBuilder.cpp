@@ -1208,6 +1208,34 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
                                                mlir::ValueRange{elemSize}).getResult();
   }
 
+  // Vec::with_capacity(cap) — create vec with pre-allocated capacity.
+  if (calleeName == "Vec_with_capacity" || calleeName == "Vec::with_capacity") {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto i64Ty = builder.getIntegerType(64);
+    auto vecWcFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_vec_with_capacity");
+    if (!vecWcFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i32Ty, i64Ty});
+      vecWcFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "__asc_vec_with_capacity", fnType);
+    }
+    auto elemSize = builder.create<mlir::LLVM::ConstantOp>(
+        location, i32Ty, static_cast<int64_t>(4)); // default 4 bytes
+    mlir::Value cap;
+    if (!args.empty()) {
+      cap = args[0];
+      if (cap.getType().isInteger(32))
+        cap = builder.create<mlir::arith::ExtUIOp>(location, i64Ty, cap);
+    } else {
+      cap = builder.create<mlir::LLVM::ConstantOp>(
+          location, i64Ty, static_cast<int64_t>(0));
+    }
+    return builder.create<mlir::LLVM::CallOp>(location, vecWcFn,
+                                               mlir::ValueRange{elemSize, cap}).getResult();
+  }
+
   // HashMap::new() — create empty hash map.
   if (calleeName == "HashMap_new" || calleeName == "HashMap::new") {
     auto ptrType = getPtrType();
@@ -2827,6 +2855,88 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     }
     return builder.create<mlir::LLVM::CallOp>(
         location, charsLenFn, mlir::ValueRange{receiver}).getResult();
+  }
+
+  // String::starts_with(other) → __asc_string_starts_with_str(self, other)
+  if (methodName == "starts_with" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_starts_with_str");
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrType, ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_starts_with_str", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver, args[1]}).getResult();
+  }
+
+  // String::ends_with(other) → __asc_string_ends_with_str(self, other)
+  if (methodName == "ends_with" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_ends_with_str");
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrType, ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_ends_with_str", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver, args[1]}).getResult();
+  }
+
+  // String::contains(other) → __asc_string_contains_str(self, other)
+  if (methodName == "contains" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1 &&
+      receiverTypeName == "String") {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_contains_str");
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrType, ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_contains_str", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver, args[1]}).getResult();
+  }
+
+  // String::to_uppercase() → __asc_string_to_uppercase(self) → new String
+  if (methodName == "to_uppercase" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_to_uppercase");
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_to_uppercase", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver}).getResult();
+  }
+
+  // String::to_lowercase() → __asc_string_to_lowercase(self) → new String
+  if (methodName == "to_lowercase" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto fn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_to_lowercase");
+    if (!fn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      fn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_to_lowercase", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, fn, mlir::ValueRange{receiver}).getResult();
   }
 
   // Vec::iter() → call __asc_vec_iter(vec_ptr, elem_size) → iterator ptr.
