@@ -151,7 +151,7 @@ private:
 
   // ---- State ----
   mlir::MLIRContext &mlirCtx;
-  ASTContext &astCtx;
+  [[maybe_unused]] ASTContext &astCtx;
   Sema &sema;
   const SourceManager &sourceManager;
   mlir::OpBuilder builder;

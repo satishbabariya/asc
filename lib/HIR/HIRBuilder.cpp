@@ -165,10 +165,10 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
       return inner;
     return getPtrType();
   }
-  if (auto *rt = dynamic_cast<RefType *>(astType)) {
+  if (dynamic_cast<RefType *>(astType)) {
     return getPtrType(); // Shared borrow = read-only pointer.
   }
-  if (auto *rmt = dynamic_cast<RefMutType *>(astType)) {
+  if (dynamic_cast<RefMutType *>(astType)) {
     return getPtrType(); // Mutable borrow = mutable pointer.
   }
 
@@ -262,12 +262,12 @@ mlir::Type HIRBuilder::convertType(asc::Type *astType) {
   }
 
   // Function type → pointer (function pointers / closures are pointers at runtime).
-  if (auto *ft = dynamic_cast<FunctionType *>(astType)) {
+  if (dynamic_cast<FunctionType *>(astType)) {
     return getPtrType();
   }
 
   // dyn Trait → fat pointer { data_ptr: ptr, vtable_ptr: ptr }
-  if (auto *dt = dynamic_cast<DynTraitType *>(astType)) {
+  if (dynamic_cast<DynTraitType *>(astType)) {
     auto ptrType = getPtrType();
     return mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrType, ptrType});
   }
@@ -586,7 +586,7 @@ mlir::Value HIRBuilder::visitImplDecl(ImplDecl *d) {
 
         // Build vtable type: { ptr per method, i64 size, i64 align }
         llvm::SmallVector<mlir::Type> fields;
-        for (auto *m : d->getMethods())
+        for ([[maybe_unused]] auto *m : d->getMethods())
           fields.push_back(ptrType);
         fields.push_back(i64Type);
         fields.push_back(i64Type);
@@ -1259,7 +1259,6 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
   // Mutex::new() — create mutex.
   if (calleeName == "Mutex_new" || calleeName == "Mutex::new") {
     auto ptrType = getPtrType();
-    auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
     auto mutexNewFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_mutex_new");
     if (!mutexNewFn) {
       mlir::OpBuilder::InsertionGuard guard(builder);
@@ -2056,7 +2055,6 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
 
     if (isDynReceiver && !dynTraitName.empty() && receiver) {
       auto ptrType = getPtrType();
-      auto fatPtrType = mlir::LLVM::LLVMStructType::getLiteral(&mlirCtx, {ptrType, ptrType});
 
       // Load fat pointer if receiver is alloca-backed.
       mlir::Value fatPtr = receiver;
@@ -2210,7 +2208,6 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
         auto sit = sema.structDecls.find(receiverTypeName);
         if (sit != sema.structDecls.end()) {
           auto structType = convertStructType(sit->second);
-          uint64_t size = getTypeSize(structType);
           auto ptrType = getPtrType();
           auto i64Type = builder.getIntegerType(64);
           auto i64One = builder.create<mlir::LLVM::ConstantOp>(
@@ -2239,7 +2236,7 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       auto tag = builder.create<mlir::LLVM::LoadOp>(location, i8Ty, receiver);
       // Check if None (tag == 0) → panic.
       auto zeroTag = builder.create<mlir::arith::ConstantIntOp>(location, 0, i8Ty);
-      auto isNone = builder.create<mlir::arith::CmpIOp>(
+      (void)builder.create<mlir::arith::CmpIOp>(
           location, mlir::arith::CmpIPredicate::eq, tag, zeroTag);
       // Ensure __asc_panic is declared.
       auto voidType = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
@@ -2270,8 +2267,8 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       // Branch: if isNone → panic block, else → ok block.
       // DECISION: Use scf.if for the panic check since we're in
       // a high-level context. Full CF lowering handles the branch.
-      auto null = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
-      auto zero32 = builder.create<mlir::LLVM::ConstantOp>(
+      (void)builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+      (void)builder.create<mlir::LLVM::ConstantOp>(
           location, i32Type, static_cast<int64_t>(0));
       // For now emit a conditional call (the branch version requires
       // block splitting which is complex at this stage).
@@ -2458,7 +2455,6 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
       args.size() >= 3) {
     auto ptrType = getPtrType();
-    auto i32Ty = builder.getIntegerType(32);
     auto voidTy = mlir::LLVM::LLVMVoidType::get(&mlirCtx);
     auto insertFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_insert");
     if (!insertFn) {
@@ -3098,8 +3094,8 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
         location, builder.getIntegerType(64), static_cast<int64_t>(1));
     auto outAlloca = builder.create<mlir::LLVM::AllocaOp>(
         location, ptrType, i32Ty, i64One);
-    auto hasValue = builder.create<mlir::LLVM::CallOp>(
-        location, nextFn, mlir::ValueRange{receiver, outAlloca, elemSize}).getResult();
+    (void)builder.create<mlir::LLVM::CallOp>(
+        location, nextFn, mlir::ValueRange{receiver, outAlloca, elemSize});
     // Load the value if hasValue == 1.
     auto val = builder.create<mlir::LLVM::LoadOp>(location, i32Ty, outAlloca);
     // Return the loaded value — the caller decides how to use it.
@@ -4710,11 +4706,9 @@ mlir::Value HIRBuilder::visitPathExpr(PathExpr *e) {
       EnumDecl *ed = eit->second;
       // Find variant index.
       int32_t variantIdx = -1;
-      EnumVariantDecl *variant = nullptr;
       for (unsigned i = 0; i < ed->getVariants().size(); ++i) {
         if (ed->getVariants()[i]->getName() == segments.back()) {
           variantIdx = static_cast<int32_t>(i);
-          variant = ed->getVariants()[i];
           break;
         }
       }
