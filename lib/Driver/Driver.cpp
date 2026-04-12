@@ -521,6 +521,60 @@ ExitCode Driver::runLsp() {
         llvm::outs().flush();
         continue;
       }
+
+      // Handle textDocument/hover — return type info for symbol under cursor.
+      if (body.find("\"textDocument/hover\"") != std::string::npos) {
+        // Extract request ID.
+        std::string reqId = "0";
+        auto idPos = body.find("\"id\"");
+        if (idPos != std::string::npos) {
+          auto start = body.find_first_of("0123456789", idPos + 4);
+          auto end = body.find_first_not_of("0123456789", start);
+          if (start != std::string::npos)
+            reqId = body.substr(start, end - start);
+        }
+
+        // Extract URI and position.
+        std::string uri;
+        auto uriPos = body.find("\"uri\"");
+        if (uriPos != std::string::npos) {
+          auto start = body.find('"', uriPos + 5) + 1;
+          auto end = body.find('"', start);
+          if (start != std::string::npos && end != std::string::npos)
+            uri = body.substr(start, end - start);
+        }
+
+        unsigned hoverLine = 0, hoverChar = 0;
+        auto linePos = body.find("\"line\"");
+        if (linePos != std::string::npos) {
+          auto start = body.find_first_of("0123456789", linePos + 6);
+          auto end = body.find_first_not_of("0123456789", start);
+          if (start != std::string::npos)
+            hoverLine = std::stoul(body.substr(start, end - start));
+        }
+        auto charPos = body.find("\"character\"");
+        if (charPos != std::string::npos) {
+          auto start = body.find_first_of("0123456789", charPos + 11);
+          auto end = body.find_first_not_of("0123456789", start);
+          if (start != std::string::npos)
+            hoverChar = std::stoul(body.substr(start, end - start));
+        }
+
+        // For now, return a simple hover response with the file and position.
+        // A full implementation would parse the file, run Sema, find the symbol
+        // at the position, and return its type.
+        std::string hoverContent = "asc: line " + std::to_string(hoverLine + 1) +
+                                    ", col " + std::to_string(hoverChar + 1);
+
+        std::string response =
+            R"({"jsonrpc":"2.0","id":)" + reqId +
+            R"(,"result":{"contents":{"kind":"plaintext","value":")" +
+            hoverContent + R"("}}})";
+        llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
+                     << response;
+        llvm::outs().flush();
+        continue;
+      }
     }
   }
 

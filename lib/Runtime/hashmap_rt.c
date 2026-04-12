@@ -146,6 +146,36 @@ void __asc_hashmap_remove(AscHashMap *m, const void *key) {
   }
 }
 
+// Get all keys as a Vec of key copies.
+void *__asc_hashmap_keys(AscHashMap *m) {
+  extern void *__asc_vec_new(unsigned int elem_size);
+  extern void __asc_vec_push(void *v, const void *elem_ptr, unsigned int elem_size);
+  void *result = __asc_vec_new(m ? m->key_size : 4);
+  if (!m) return result;
+  for (unsigned long i = 0; i < m->capacity; i++) {
+    unsigned char *entry = m->buckets + i * m->entry_size;
+    if (entry[0]) {
+      __asc_vec_push(result, entry + 1, m->key_size);
+    }
+  }
+  return result;
+}
+
+// Get all values as a Vec of value copies.
+void *__asc_hashmap_values(AscHashMap *m) {
+  extern void *__asc_vec_new(unsigned int elem_size);
+  extern void __asc_vec_push(void *v, const void *elem_ptr, unsigned int elem_size);
+  void *result = __asc_vec_new(m ? m->val_size : 4);
+  if (!m) return result;
+  for (unsigned long i = 0; i < m->capacity; i++) {
+    unsigned char *entry = m->buckets + i * m->entry_size;
+    if (entry[0]) {
+      __asc_vec_push(result, entry + 1 + m->key_size, m->val_size);
+    }
+  }
+  return result;
+}
+
 void __asc_hashmap_free(AscHashMap *m) {
   if (m) {
     if (m->buckets) free(m->buckets);

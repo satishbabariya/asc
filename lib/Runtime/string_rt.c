@@ -107,6 +107,57 @@ void __asc_string_clear(AscString *s) {
   if (s) s->len = 0;
 }
 
+// Split string by delimiter, returns a Vec of Strings.
+// For simplicity, returns a Vec<ptr> where each ptr is an AscString*.
+void *__asc_string_split(AscString *s, const char *delim, unsigned long delim_len) {
+  extern void *__asc_vec_new(unsigned int elem_size);
+  extern void __asc_vec_push(void *v, const void *elem_ptr, unsigned int elem_size);
+
+  void *result = __asc_vec_new(sizeof(void *));
+  if (!s || !s->ptr || s->len == 0) return result;
+
+  unsigned long start = 0;
+  for (unsigned long i = 0; i <= s->len - delim_len; i++) {
+    int match = 1;
+    for (unsigned long j = 0; j < delim_len; j++) {
+      if (s->ptr[i + j] != delim[j]) { match = 0; break; }
+    }
+    if (match) {
+      void *part = __asc_string_from(s->ptr + start, i - start);
+      __asc_vec_push(result, &part, sizeof(void *));
+      start = i + delim_len;
+      i += delim_len - 1;
+    }
+  }
+  // Push remaining.
+  void *last = __asc_string_from(s->ptr + start, s->len - start);
+  __asc_vec_push(result, &last, sizeof(void *));
+  return result;
+}
+
+// Trim whitespace from both ends.
+AscString *__asc_string_trim(AscString *s) {
+  if (!s || !s->ptr || s->len == 0)
+    return __asc_string_from("", 0);
+  unsigned long start = 0, end = s->len;
+  while (start < end && (s->ptr[start] == ' ' || s->ptr[start] == '\t' ||
+         s->ptr[start] == '\n' || s->ptr[start] == '\r')) start++;
+  while (end > start && (s->ptr[end-1] == ' ' || s->ptr[end-1] == '\t' ||
+         s->ptr[end-1] == '\n' || s->ptr[end-1] == '\r')) end--;
+  return __asc_string_from(s->ptr + start, end - start);
+}
+
+// Get string length in chars (bytes for ASCII).
+unsigned long __asc_string_chars_len(AscString *s) {
+  return s ? s->len : 0;
+}
+
+// Get char at index (byte value).
+unsigned int __asc_string_char_at(AscString *s, unsigned long index) {
+  if (!s || index >= s->len) return 0;
+  return (unsigned char)s->ptr[index];
+}
+
 // Free a string.
 void __asc_string_free(AscString *s) {
   if (s) {

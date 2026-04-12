@@ -2699,6 +2699,36 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return lenCall.getResult();
   }
 
+  // HashMap::keys() → __asc_hashmap_keys(self), returns Vec<K> pointer
+  if (methodName == "keys" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto keysFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_keys");
+    if (!keysFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      keysFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_hashmap_keys", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, keysFn, mlir::ValueRange{receiver}).getResult();
+  }
+
+  // HashMap::values() → __asc_hashmap_values(self), returns Vec<V> pointer
+  if (methodName == "values" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto valuesFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_hashmap_values");
+    if (!valuesFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      valuesFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_hashmap_values", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, valuesFn, mlir::ValueRange{receiver}).getResult();
+  }
+
   // String::as_ptr() or String::as_str() → __asc_string_as_ptr(self)
   if ((methodName == "as_ptr" || methodName == "as_str") && receiver &&
       mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
@@ -2716,6 +2746,87 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     auto call = builder.create<mlir::LLVM::CallOp>(
         location, asPtrFn, mlir::ValueRange{receiver});
     return call.getResult();
+  }
+
+  // String::trim() → __asc_string_trim(self)
+  if (methodName == "trim" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto trimFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_trim");
+    if (!trimFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+      trimFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_trim", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(location, trimFn, mlir::ValueRange{receiver}).getResult();
+  }
+
+  // String::char_at(index) → __asc_string_char_at(self, index)
+  if (methodName == "char_at" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    auto ptrType = getPtrType();
+    auto i32Ty = builder.getIntegerType(32);
+    auto i64Ty = builder.getIntegerType(64);
+    auto charAtFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_char_at");
+    if (!charAtFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Ty, {ptrType, i64Ty});
+      charAtFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_char_at", fnType);
+    }
+    mlir::Value idx = args[1];
+    if (idx.getType().isInteger(32))
+      idx = builder.create<mlir::arith::ExtUIOp>(location, i64Ty, idx);
+    return builder.create<mlir::LLVM::CallOp>(location, charAtFn, mlir::ValueRange{receiver, idx}).getResult();
+  }
+
+  // String::split(delim) → __asc_string_split(self, data_ptr, len) → Vec<String>
+  if (methodName == "split" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType()) &&
+      args.size() > 1) {
+    auto ptrType = getPtrType();
+    auto i64Ty = builder.getIntegerType(64);
+    auto splitFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_split");
+    if (!splitFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, ptrType, i64Ty});
+      splitFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_split", fnType);
+    }
+    mlir::Value delimPtr = args[1];
+    mlir::Value delimLen;
+    if (e->getArgs().size() > 0) {
+      if (auto *strLit = dynamic_cast<StringLiteral *>(e->getArgs()[0])) {
+        std::string val = strLit->getValue().str();
+        if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+          val = val.substr(1, val.size() - 2);
+        delimLen = builder.create<mlir::LLVM::ConstantOp>(
+            location, i64Ty, static_cast<int64_t>(val.size()));
+      }
+    }
+    if (!delimLen)
+      delimLen = builder.create<mlir::LLVM::ConstantOp>(
+          location, i64Ty, static_cast<int64_t>(0));
+    return builder.create<mlir::LLVM::CallOp>(
+        location, splitFn, mlir::ValueRange{receiver, delimPtr, delimLen}).getResult();
+  }
+
+  // String::chars_len() → __asc_string_chars_len(self) (same as len for ASCII)
+  if (methodName == "chars_len" && receiver &&
+      mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
+    auto ptrType = getPtrType();
+    auto i64Ty = builder.getIntegerType(64);
+    auto charsLenFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_chars_len");
+    if (!charsLenFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i64Ty, {ptrType});
+      charsLenFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "__asc_string_chars_len", fnType);
+    }
+    return builder.create<mlir::LLVM::CallOp>(
+        location, charsLenFn, mlir::ValueRange{receiver}).getResult();
   }
 
   // Vec::iter() → call __asc_vec_iter(vec_ptr, elem_size) → iterator ptr.
