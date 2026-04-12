@@ -222,6 +222,21 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("RwLock", std::move(sym));
   }
 
+  // --- File ---
+  // File handle for I/O operations.
+  {
+    auto *fileStruct = ctx.create<StructDecl>(
+        "File", std::vector<GenericParam>{},
+        std::vector<FieldDecl *>{
+            ctx.create<FieldDecl>("fd", ctx.getBuiltinType(BuiltinTypeKind::I32), loc)},
+        loc);
+    structDecls["File"] = fileStruct;
+    Symbol sym;
+    sym.name = "File";
+    sym.decl = fileStruct;
+    scope->declare("File", std::move(sym));
+  }
+
   // --- Core Traits ---
 
   // Drop trait: fn drop(refmut<Self>): void
@@ -733,6 +748,125 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     sym.name = "Hash";
     sym.decl = hashTrait;
     scope->declare("Hash", std::move(sym));
+  }
+
+  // From<T> trait: fn from(T): Self
+  {
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    ParamDecl valueParam;
+    valueParam.name = "value";
+    valueParam.type = ctx.create<NamedType>("T", std::vector<Type *>{}, loc);
+    valueParam.loc = loc;
+    auto *fromMethod = ctx.create<FunctionDecl>(
+        "from", std::vector<GenericParam>{gp},
+        std::vector<ParamDecl>{valueParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem fromItem;
+    fromItem.method = fromMethod;
+    auto *fromTrait = ctx.create<TraitDecl>(
+        "From", std::vector<GenericParam>{gp},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{fromItem}, loc);
+    traitDecls["From"] = fromTrait;
+    Symbol sym;
+    sym.name = "From";
+    sym.decl = fromTrait;
+    scope->declare("From", std::move(sym));
+  }
+
+  // Into<T> trait: fn into(self): T
+  {
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRef;
+    selfParam.isSelfRef = true;
+    selfParam.loc = loc;
+    auto *intoMethod = ctx.create<FunctionDecl>(
+        "into", std::vector<GenericParam>{gp},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<NamedType>("T", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem intoItem;
+    intoItem.method = intoMethod;
+    auto *intoTrait = ctx.create<TraitDecl>(
+        "Into", std::vector<GenericParam>{gp},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{intoItem}, loc);
+    traitDecls["Into"] = intoTrait;
+    Symbol sym;
+    sym.name = "Into";
+    sym.decl = intoTrait;
+    scope->declare("Into", std::move(sym));
+  }
+
+  // AsRef<T> trait: fn as_ref(ref<Self>): ref<T>
+  {
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRef;
+    selfParam.isSelfRef = true;
+    selfParam.loc = loc;
+    auto *asRefMethod = ctx.create<FunctionDecl>(
+        "as_ref", std::vector<GenericParam>{gp},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<RefType>(
+            ctx.create<NamedType>("T", std::vector<Type *>{}, loc), loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem asRefItem;
+    asRefItem.method = asRefMethod;
+    auto *asRefTrait = ctx.create<TraitDecl>(
+        "AsRef", std::vector<GenericParam>{gp},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{asRefItem}, loc);
+    traitDecls["AsRef"] = asRefTrait;
+    Symbol sym;
+    sym.name = "AsRef";
+    sym.decl = asRefTrait;
+    scope->declare("AsRef", std::move(sym));
+  }
+
+  // AsMut<T> trait: fn as_mut(refmut<Self>): refmut<T>
+  {
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    auto *asMutMethod = ctx.create<FunctionDecl>(
+        "as_mut", std::vector<GenericParam>{gp},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<RefMutType>(
+            ctx.create<NamedType>("T", std::vector<Type *>{}, loc), loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem asMutItem;
+    asMutItem.method = asMutMethod;
+    auto *asMutTrait = ctx.create<TraitDecl>(
+        "AsMut", std::vector<GenericParam>{gp},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{asMutItem}, loc);
+    traitDecls["AsMut"] = asMutTrait;
+    Symbol sym;
+    sym.name = "AsMut";
+    sym.decl = asMutTrait;
+    scope->declare("AsMut", std::move(sym));
   }
 }
 
