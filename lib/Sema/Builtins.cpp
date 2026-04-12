@@ -150,6 +150,44 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Arc", std::move(sym));
   }
 
+  // --- Rc<T> ---
+  // Non-atomic reference counted (single-threaded).
+  {
+    auto *ptrField = ctx.create<FieldDecl>(
+        "ptr", ctx.getBuiltinType(BuiltinTypeKind::USize), loc);
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    auto *rcStruct = ctx.create<StructDecl>(
+        "Rc", std::vector<GenericParam>{gp},
+        std::vector<FieldDecl *>{ptrField}, loc);
+    structDecls["Rc"] = rcStruct;
+
+    Symbol sym;
+    sym.name = "Rc";
+    sym.decl = rcStruct;
+    scope->declare("Rc", std::move(sym));
+  }
+
+  // --- Weak<T> ---
+  // Weak reference to Rc<T>.
+  {
+    auto *ptrField = ctx.create<FieldDecl>(
+        "ptr", ctx.getBuiltinType(BuiltinTypeKind::USize), loc);
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    auto *weakStruct = ctx.create<StructDecl>(
+        "Weak", std::vector<GenericParam>{gp},
+        std::vector<FieldDecl *>{ptrField}, loc);
+    structDecls["Weak"] = weakStruct;
+
+    Symbol sym;
+    sym.name = "Weak";
+    sym.decl = weakStruct;
+    scope->declare("Weak", std::move(sym));
+  }
+
   // --- Core Traits ---
 
   // Drop trait: fn drop(refmut<Self>): void
