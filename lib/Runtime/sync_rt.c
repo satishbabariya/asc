@@ -111,3 +111,77 @@ uint32_t __asc_semaphore_available(void *sem) {
 void __asc_semaphore_free(void *sem) {
   free(sem);
 }
+
+// --- RwLock ---
+// Readers-writer lock using atomic operations.
+// Layout: { readers: int32_t (atomic), writer: int32_t (atomic) }
+
+typedef struct {
+  int32_t readers;  // atomic: count of active readers
+  int32_t writer;   // atomic: 1 if writer holds lock, 0 otherwise
+} AscRwLock;
+
+void *__asc_rwlock_new(void) {
+  AscRwLock *rw = (AscRwLock *)calloc(1, sizeof(AscRwLock));
+  __atomic_store_n(&rw->readers, 0, __ATOMIC_RELEASE);
+  __atomic_store_n(&rw->writer, 0, __ATOMIC_RELEASE);
+  return rw;
+}
+
+void __asc_rwlock_read_lock(void *ptr) {
+  AscRwLock *rw = (AscRwLock *)ptr;
+  if (!rw) return;
+  while (1) {
+    // Wait until no writer.
+    while (__atomic_load_n(&rw->writer, __ATOMIC_ACQUIRE) != 0) {
+#ifdef __x86_64__
+      __builtin_ia32_pause();
+#endif
+      sched_yield();
+    }
+    __atomic_fetch_add(&rw->readers, 1, __ATOMIC_ACQUIRE);
+    // Double-check no writer snuck in.
+    if (__atomic_load_n(&rw->writer, __ATOMIC_ACQUIRE) == 0)
+      return; // Got read lock.
+    __atomic_fetch_sub(&rw->readers, 1, __ATOMIC_RELEASE);
+  }
+}
+
+void __asc_rwlock_read_unlock(void *ptr) {
+  AscRwLock *rw = (AscRwLock *)ptr;
+  if (!rw) return;
+  __atomic_fetch_sub(&rw->readers, 1, __ATOMIC_RELEASE);
+}
+
+void __asc_rwlock_write_lock(void *ptr) {
+  AscRwLock *rw = (AscRwLock *)ptr;
+  if (!rw) return;
+  while (1) {
+    int32_t expected = 0;
+    if (__atomic_compare_exchange_n(&rw->writer, &expected, 1, 0,
+                                    __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+      // Wait for readers to drain.
+      while (__atomic_load_n(&rw->readers, __ATOMIC_ACQUIRE) != 0) {
+#ifdef __x86_64__
+        __builtin_ia32_pause();
+#endif
+        sched_yield();
+      }
+      return;
+    }
+#ifdef __x86_64__
+    __builtin_ia32_pause();
+#endif
+    sched_yield();
+  }
+}
+
+void __asc_rwlock_write_unlock(void *ptr) {
+  AscRwLock *rw = (AscRwLock *)ptr;
+  if (!rw) return;
+  __atomic_store_n(&rw->writer, 0, __ATOMIC_RELEASE);
+}
+
+void __asc_rwlock_free(void *ptr) {
+  free(ptr);
+}

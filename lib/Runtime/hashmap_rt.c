@@ -176,6 +176,18 @@ void *__asc_hashmap_values(AscHashMap *m) {
   return result;
 }
 
+// Clear all entries.
+void __asc_hashmap_clear(AscHashMap *m) {
+  if (!m) return;
+  memset(m->buckets, 0, m->capacity * m->entry_size);
+  m->count = 0;
+}
+
+// Check if empty.
+int __asc_hashmap_is_empty(AscHashMap *m) {
+  return (!m || m->count == 0) ? 1 : 0;
+}
+
 void __asc_hashmap_free(AscHashMap *m) {
   if (m) {
     if (m->buckets) free(m->buckets);

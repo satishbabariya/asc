@@ -167,6 +167,30 @@ void __asc_vec_retain(AscVec *v, int (*fn)(const void *),
   v->len = write;
 }
 
+// Dedup: remove consecutive duplicate elements.
+// Uses memcmp to compare adjacent elements.
+void __asc_vec_dedup(AscVec *v, unsigned int elem_size) {
+  if (!v || v->len <= 1) return;
+  unsigned long write = 1;
+  for (unsigned long read = 1; read < v->len; read++) {
+    if (memcmp(v->ptr + (read - 1) * elem_size,
+               v->ptr + read * elem_size, elem_size) != 0) {
+      if (write != read)
+        memcpy(v->ptr + write * elem_size, v->ptr + read * elem_size, elem_size);
+      write++;
+    }
+  }
+  v->len = write;
+}
+
+// Extend: append all elements from another vec.
+void __asc_vec_extend(AscVec *dst, AscVec *src, unsigned int elem_size) {
+  if (!dst || !src || src->len == 0) return;
+  for (unsigned long i = 0; i < src->len; i++) {
+    __asc_vec_push(dst, src->ptr + i * elem_size, elem_size);
+  }
+}
+
 // Free a vec and its data.
 void __asc_vec_free(AscVec *v) {
   if (v) {
