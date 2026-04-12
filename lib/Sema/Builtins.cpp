@@ -868,6 +868,62 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     sym.decl = asMutTrait;
     scope->declare("AsMut", std::move(sym));
   }
+
+  // Deref trait: fn deref(ref<Self>): ref<Target>
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRef;
+    selfParam.isSelfRef = true;
+    selfParam.loc = loc;
+    auto *derefMethod = ctx.create<FunctionDecl>(
+        "deref", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<RefType>(
+            ctx.create<NamedType>("Target", std::vector<Type *>{}, loc), loc),
+        nullptr, std::vector<WhereConstraint>{}, loc);
+    TraitItem derefItem;
+    derefItem.method = derefMethod;
+    auto *derefTrait = ctx.create<TraitDecl>(
+        "Deref", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{derefItem}, loc);
+    traitDecls["Deref"] = derefTrait;
+    Symbol sym;
+    sym.name = "Deref";
+    sym.decl = derefTrait;
+    scope->declare("Deref", std::move(sym));
+  }
+
+  // DerefMut trait: fn deref_mut(refmut<Self>): refmut<Target>
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    auto *derefMutMethod = ctx.create<FunctionDecl>(
+        "deref_mut", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<RefMutType>(
+            ctx.create<NamedType>("Target", std::vector<Type *>{}, loc), loc),
+        nullptr, std::vector<WhereConstraint>{}, loc);
+    TraitItem derefMutItem;
+    derefMutItem.method = derefMutMethod;
+    auto *derefMutTrait = ctx.create<TraitDecl>(
+        "DerefMut", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{derefMutItem}, loc);
+    traitDecls["DerefMut"] = derefMutTrait;
+    Symbol sym;
+    sym.name = "DerefMut";
+    sym.decl = derefMutTrait;
+    scope->declare("DerefMut", std::move(sym));
+  }
 }
 
 } // namespace asc

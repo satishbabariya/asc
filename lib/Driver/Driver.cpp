@@ -418,6 +418,7 @@ ExitCode Driver::runLsp() {
             R"({"jsonrpc":"2.0","id":0,"result":{"capabilities":{)"
             R"("textDocumentSync":1,)"
             R"("hoverProvider":true,)"
+            R"("completionProvider":{"triggerCharacters":[".","::"]},)"
             R"("diagnosticProvider":{"interFileDependencies":false,"workspaceDiagnostics":false})"
             R"(},"serverInfo":{"name":"asc","version":"0.1.0"}}})";
         llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
@@ -570,6 +571,49 @@ ExitCode Driver::runLsp() {
             R"({"jsonrpc":"2.0","id":)" + reqId +
             R"(,"result":{"contents":{"kind":"plaintext","value":")" +
             hoverContent + R"("}}})";
+        llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
+                     << response;
+        llvm::outs().flush();
+        continue;
+      }
+
+      // Handle textDocument/completion — return known symbols.
+      if (body.find("\"textDocument/completion\"") != std::string::npos) {
+        std::string reqId = "0";
+        auto idPos = body.find("\"id\"");
+        if (idPos != std::string::npos) {
+          auto start = body.find_first_of("0123456789", idPos + 4);
+          auto end = body.find_first_not_of("0123456789", start);
+          if (start != std::string::npos)
+            reqId = body.substr(start, end - start);
+        }
+
+        // Return a static list of built-in types and common functions.
+        std::string items = "[";
+        const char *builtins[] = {
+          "Vec", "String", "HashMap", "Box", "Arc", "Rc",
+          "Option", "Result", "Mutex", "Semaphore", "RwLock", "File",
+          "i32", "i64", "u32", "u64", "f32", "f64", "bool", "usize",
+          "println", "print", "panic",
+          "fn", "let", "const", "struct", "enum", "trait", "impl",
+          "if", "else", "for", "while", "loop", "match", "return", "break",
+          nullptr
+        };
+        bool first = true;
+        for (int i = 0; builtins[i]; i++) {
+          if (!first) items += ",";
+          first = false;
+          // Kind: 6=Variable, 7=Class, 14=Keyword, 21=Struct
+          int kind = 21; // struct by default
+          if (builtins[i][0] >= 'a') kind = 14; // keywords lowercase
+          items += "{\"label\":\"" + std::string(builtins[i]) +
+                   "\",\"kind\":" + std::to_string(kind) + "}";
+        }
+        items += "]";
+
+        std::string response =
+            R"({"jsonrpc":"2.0","id":)" + reqId +
+            R"(,"result":{"isIncomplete":false,"items":)" + items + "}}";
         llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
                      << response;
         llvm::outs().flush();
