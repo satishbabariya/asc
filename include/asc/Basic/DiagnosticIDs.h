@@ -25,10 +25,15 @@ enum class DiagID : unsigned {
   ErrUnboundedRecursion = 9,          // E009
   ErrDoublePanic = 10,                // E010
 
+  // Ownership linearity
+  ErrResourceLeak = 11,               // E011
+  ErrDoubleConsume = 12,              // E012
+
   // Warnings
   WarnConditionalMoveDropFlag = 101,  // W001
   WarnLargeCopyType = 102,            // W002
   WarnNonExhaustiveMatch = 103,       // W003
+  WarnResourceLeak = 104,            // W004
 
   // General compiler diagnostics
   ErrUnexpectedToken = 200,
@@ -87,6 +92,9 @@ inline const char *getDiagCode(DiagID id) {
   case DiagID::WarnConditionalMoveDropFlag: return "W001";
   case DiagID::WarnLargeCopyType: return "W002";
   case DiagID::WarnNonExhaustiveMatch: return "W003";
+  case DiagID::WarnResourceLeak: return "W004";
+  case DiagID::ErrResourceLeak: return "E011";
+  case DiagID::ErrDoubleConsume: return "E012";
   default: return nullptr;
   }
 }

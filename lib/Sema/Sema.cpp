@@ -191,6 +191,20 @@ void Sema::checkCompoundStmt(CompoundStmt *s) {
     checkStmt(stmt);
   if (s->getTrailingExpr())
     checkExpr(s->getTrailingExpr());
+
+  // W004: Check for owned values that are never used — resource leaks.
+  currentScope->forEachSymbol([&](llvm::StringRef name, Symbol &sym) {
+    if (!sym.decl || sym.ownership.isCopy || sym.isMoved || sym.isUsed)
+      return;
+    if (!sym.type || isCopyType(sym.type))
+      return;
+    if (dynamic_cast<FunctionDecl *>(sym.decl))
+      return;
+    diags.emitWarning(sym.decl->getLocation(), DiagID::WarnResourceLeak,
+                      "owned value '" + name.str() +
+                      "' is never used — this is a resource leak");
+  });
+
   popScope();
 }
 

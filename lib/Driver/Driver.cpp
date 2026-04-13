@@ -9,6 +9,7 @@
 #include "asc/Analysis/RegionInference.h"
 #include "asc/Analysis/AliasCheck.h"
 #include "asc/Analysis/MoveCheck.h"
+#include "asc/Analysis/LinearityCheck.h"
 #include "asc/Analysis/SendSyncCheck.h"
 #include "asc/Analysis/DropInsertion.h"
 #include "asc/Analysis/PanicScopeWrap.h"
@@ -742,11 +743,12 @@ ExitCode Driver::runAnalysis() {
   // Verifier runs after full LLVM lowering in CodeGen instead.
   pm.enableVerifier(false);
 
-  // 5-pass borrow checker.
+  // 6-pass borrow checker.
   pm.addNestedPass<mlir::func::FuncOp>(createLivenessAnalysisPass());
   pm.addNestedPass<mlir::func::FuncOp>(createRegionInferencePass());
   pm.addNestedPass<mlir::func::FuncOp>(createAliasCheckPass());
   pm.addNestedPass<mlir::func::FuncOp>(createMoveCheckPass());
+  pm.addNestedPass<mlir::func::FuncOp>(createLinearityCheckPass());
   pm.addNestedPass<mlir::func::FuncOp>(createSendSyncCheckPass());
 
   if (failed(pm.run(*mlirState->module))) {

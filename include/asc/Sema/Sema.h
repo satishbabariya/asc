@@ -39,6 +39,7 @@ struct Symbol {
   Type *type = nullptr;
   bool isMutable = false;
   bool isMoved = false;               // Track use-after-move
+  bool isUsed = false;                // Track if value is ever referenced
   SourceLocation movedAt;              // Where it was moved
   OwnershipInfo ownership;
 };

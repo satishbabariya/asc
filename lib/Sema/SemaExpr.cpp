@@ -232,6 +232,8 @@ Type *Sema::checkDeclRefExpr(DeclRefExpr *e) {
                     "undeclared identifier '" + e->getName().str() + "'");
     return nullptr;
   }
+  // Mark as used for linearity tracking.
+  sym->isUsed = true;
   // Use-after-move detection: check if the value has been moved.
   if (sym->isMoved) {
     diags.emitError(e->getLocation(), DiagID::ErrUseAfterMove,

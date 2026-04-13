@@ -3,6 +3,7 @@ add_library(ascAnalysis
   RegionInference.cpp
   AliasCheck.cpp
   MoveCheck.cpp
+  LinearityCheck.cpp
   SendSyncCheck.cpp
   DropInsertion.cpp
   PanicScopeWrap.cpp
