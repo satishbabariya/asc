@@ -55,6 +55,9 @@ struct PanicLoweringPass
         "__asc_set_panic_handler", voidTy, {ptrType});
     auto clearHandlerFn = getOrDeclare(module, builder,
         "__asc_clear_panic_handler", voidTy, {});
+    auto getPanicInfoFn = getOrDeclare(module, builder,
+        "__asc_get_panic_info", ptrType, {});
+    (void)getPanicInfoFn; // Declared to ensure symbol appears in LLVM IR.
     auto abortFn = getOrDeclare(module, builder, "abort", voidTy, {});
 
     // Phase 1: Collect all panic scope ops per function (no mutation).

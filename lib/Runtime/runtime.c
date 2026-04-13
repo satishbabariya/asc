@@ -51,6 +51,26 @@ _Thread_local static int __asc_in_unwind = 0;
 _Thread_local static jmp_buf *__asc_panic_jmpbuf = 0;
 #endif
 
+// PanicInfo — captures metadata about the most recent panic for inspection.
+typedef struct {
+    const char *msg;
+    unsigned int msg_len;
+    const char *file;
+    unsigned int file_len;
+    unsigned int line;
+    unsigned int col;
+} PanicInfo;
+
+#ifdef __wasm__
+static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
+#else
+_Thread_local static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
+#endif
+
+PanicInfo *__asc_get_panic_info(void) {
+    return &__asc_panic_info;
+}
+
 // Register/clear a setjmp-based panic handler for drop-on-panic.
 void __asc_set_panic_handler(void *buf) {
 #ifndef __wasm__
@@ -70,10 +90,28 @@ void __asc_panic(const char *msg, unsigned int msg_len,
                  const char *file, unsigned int file_len,
                  unsigned int line, unsigned int col) {
   if (__asc_in_unwind) {
-    // Double panic — abort immediately.
+    // Double panic — print diagnostic and abort immediately.
+#ifndef __wasm__
+    extern long write(int fd, const void *buf, unsigned long count);
+    write(2, "thread panicked while panicking: '", 34);
+    if (msg && msg_len > 0)
+      write(2, msg, msg_len);
+    write(2, "'\noriginal panic: '", 19);
+    if (__asc_panic_info.msg && __asc_panic_info.msg_len > 0)
+      write(2, __asc_panic_info.msg, __asc_panic_info.msg_len);
+    write(2, "'\n", 2);
+#endif
     __builtin_trap();
   }
   __asc_in_unwind = 1;
+
+  // Store panic metadata for inspection (e.g., catch blocks, double-panic).
+  __asc_panic_info.msg = msg;
+  __asc_panic_info.msg_len = msg_len;
+  __asc_panic_info.file = file;
+  __asc_panic_info.file_len = file_len;
+  __asc_panic_info.line = line;
+  __asc_panic_info.col = col;
 
 #ifdef __wasm__
   // On Wasm, trap directly. Wasm EH would use throw $panic_tag.
