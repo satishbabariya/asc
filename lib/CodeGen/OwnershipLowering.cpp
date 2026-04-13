@@ -77,6 +77,11 @@ struct OwnershipLoweringPass
           size = sizeAttr.getUInt();
 
         bool useHeap = op->hasAttr("heap");
+        // Escape analysis: auto-promote to heap if value escapes scope.
+        if (auto escapeAttr = op->getAttrOfType<mlir::StringAttr>("escape_status")) {
+          if (escapeAttr.getValue() == "must_heap")
+            useHeap = true;
+        }
         mlir::Value result;
 
         if (useHeap) {

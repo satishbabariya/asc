@@ -11,6 +11,7 @@
 #include "asc/Analysis/MoveCheck.h"
 #include "asc/Analysis/LinearityCheck.h"
 #include "asc/Analysis/SendSyncCheck.h"
+#include "asc/Analysis/EscapeAnalysis.h"
 #include "asc/Analysis/DropInsertion.h"
 #include "asc/Analysis/PanicScopeWrap.h"
 #include "mlir/IR/MLIRContext.h"
@@ -764,6 +765,7 @@ ExitCode Driver::runTransforms() {
   // Verifier must be off here until these ops are properly registered.
   pm.enableVerifier(false);
 
+  pm.addPass(createEscapeAnalysisPass());
   pm.addNestedPass<mlir::func::FuncOp>(createDropInsertionPass());
   pm.addNestedPass<mlir::func::FuncOp>(createPanicScopeWrapPass());
 

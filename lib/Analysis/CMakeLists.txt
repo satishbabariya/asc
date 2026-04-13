@@ -5,6 +5,7 @@ add_library(ascAnalysis
   MoveCheck.cpp
   LinearityCheck.cpp
   SendSyncCheck.cpp
+  EscapeAnalysis.cpp
   DropInsertion.cpp
   PanicScopeWrap.cpp
 )
