@@ -9,7 +9,8 @@ OwnDialect::OwnDialect(mlir::MLIRContext *context)
     : mlir::Dialect("own", context, mlir::TypeID::get<OwnDialect>()) {
   addTypes<OwnValType, BorrowType, BorrowMutType>();
   addOperations<OwnAllocOp, OwnMoveOp, OwnDropOp, OwnCopyOp, BorrowRefOp,
-                BorrowMutOp>();
+                BorrowMutOp, OwnDropFlagAllocOp, OwnDropFlagSetOp,
+                OwnDropFlagCheckOp>();
 }
 
 mlir::Type OwnDialect::parseType(mlir::DialectAsmParser &parser) const {

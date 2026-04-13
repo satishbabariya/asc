@@ -65,6 +65,9 @@ private:
   /// Insert a single own.drop operation before the given operation.
   void insertDropBefore(mlir::Operation *insertPoint, mlir::Value value);
 
+  /// Insert drop flag alloc/set ops for conditionally moved values.
+  void insertDropFlags(mlir::func::FuncOp func);
+
   /// Check if a value's type has a custom Drop implementation.
   bool hasCustomDrop(mlir::Value value) const;
 
@@ -74,6 +77,9 @@ private:
   /// All owned values in the function, indexed by defining block.
   llvm::DenseMap<mlir::Block *, llvm::SmallVector<OwnedValueInfo, 8>>
       ownedValuesByBlock;
+
+  /// Mapping from conditionally-moved values to their drop flag SSA values.
+  llvm::DenseMap<mlir::Value, mlir::Value> dropFlagMap;
 
   /// Counter for declaration ordering.
   unsigned nextDeclOrder = 0;

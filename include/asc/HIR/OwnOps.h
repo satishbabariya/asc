@@ -79,6 +79,50 @@ public:
                     mlir::Value source);
 };
 
+// Drop flag operations for conditional moves (RFC-0008).
+// These track at runtime whether a value has been moved, gating the drop.
+
+class OwnDropFlagAllocOp
+    : public mlir::Op<OwnDropFlagAllocOp, mlir::OpTrait::OneResult,
+                       mlir::OpTrait::ZeroOperands> {
+public:
+  using Op::Op;
+  static llvm::StringRef getOperationName() { return "own.drop_flag_alloc"; }
+  static llvm::ArrayRef<llvm::StringRef> getAttributeNames() { return {}; }
+
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                    mlir::Type resultType);
+  mlir::Value getResult() { return getOperation()->getResult(0); }
+};
+
+class OwnDropFlagSetOp
+    : public mlir::Op<OwnDropFlagSetOp, mlir::OpTrait::ZeroResults,
+                       mlir::OpTrait::NOperands<2>::Impl> {
+public:
+  using Op::Op;
+  static llvm::StringRef getOperationName() { return "own.drop_flag_set"; }
+  static llvm::ArrayRef<llvm::StringRef> getAttributeNames() { return {}; }
+
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                    mlir::Value flag, mlir::Value boolValue);
+  mlir::Value getFlag() { return getOperand(0); }
+  mlir::Value getBoolValue() { return getOperand(1); }
+};
+
+class OwnDropFlagCheckOp
+    : public mlir::Op<OwnDropFlagCheckOp, mlir::OpTrait::OneResult,
+                       mlir::OpTrait::OneOperand> {
+public:
+  using Op::Op;
+  static llvm::StringRef getOperationName() { return "own.drop_flag_check"; }
+  static llvm::ArrayRef<llvm::StringRef> getAttributeNames() { return {}; }
+
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                    mlir::Value flag);
+  mlir::Value getFlag() { return getOperand(); }
+  mlir::Value getResult() { return getOperation()->getResult(0); }
+};
+
 class BorrowRefOp
     : public mlir::Op<BorrowRefOp, mlir::OpTrait::OneResult,
                        mlir::OpTrait::OneOperand> {

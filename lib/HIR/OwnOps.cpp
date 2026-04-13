@@ -27,6 +27,25 @@ void OwnCopyOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
   state.addTypes(source.getType());
 }
 
+void OwnDropFlagAllocOp::build(mlir::OpBuilder &builder,
+                                mlir::OperationState &state,
+                                mlir::Type resultType) {
+  state.addTypes(resultType);
+}
+
+void OwnDropFlagSetOp::build(mlir::OpBuilder &builder,
+                              mlir::OperationState &state, mlir::Value flag,
+                              mlir::Value boolValue) {
+  state.addOperands({flag, boolValue});
+}
+
+void OwnDropFlagCheckOp::build(mlir::OpBuilder &builder,
+                                mlir::OperationState &state,
+                                mlir::Value flag) {
+  state.addOperands(flag);
+  state.addTypes(mlir::IntegerType::get(builder.getContext(), 1));
+}
+
 void BorrowRefOp::build(mlir::OpBuilder &builder, mlir::OperationState &state,
                          mlir::Value ownedValue) {
   state.addOperands(ownedValue);
