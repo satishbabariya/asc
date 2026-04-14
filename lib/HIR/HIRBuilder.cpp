@@ -2053,8 +2053,48 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
   auto location = loc(e->getLocation());
   mlir::Value receiver = visitExpr(e->getReceiver());
   llvm::SmallVector<mlir::Value> args;
-  if (receiver)
+  if (receiver) {
+    // If receiver is own.val but method takes ref/refmut, create a borrow
+    // instead of consuming the owned value.
+    if (mlir::isa<own::OwnValType>(receiver.getType())) {
+      // Check if the method's self parameter is ref or refmut.
+      // If so, create a borrow instead of consuming the owned value.
+      asc::Type *recAstType = e->getReceiver()->getType();
+      asc::Type *innerType = recAstType;
+      if (auto *ot = dynamic_cast<OwnType *>(recAstType))
+        innerType = ot->getInner();
+      auto *namedTy = dynamic_cast<NamedType *>(innerType);
+      if (namedTy) {
+        if (auto *impls = sema.getImplsForType(namedTy->getName())) {
+          for (auto *impl : *impls) {
+            for (auto *method : impl->getMethods()) {
+              if (method->getName() == e->getMethodName()) {
+                auto &params = method->getParams();
+                if (!params.empty() && params[0].isSelfRef) {
+                  auto borrowType = own::BorrowType::get(&mlirCtx,
+                      receiver.getType());
+                  auto borrowOp = builder.create(
+                      mlir::OperationState(location, "own.borrow_ref",
+                          {receiver}, {borrowType}));
+                  receiver = borrowOp->getResult(0);
+                } else if (!params.empty() && params[0].isSelfRefMut) {
+                  auto borrowType = own::BorrowMutType::get(&mlirCtx,
+                      receiver.getType());
+                  auto borrowOp = builder.create(
+                      mlir::OperationState(location, "own.borrow_mut",
+                          {receiver}, {borrowType}));
+                  receiver = borrowOp->getResult(0);
+                }
+                goto done_borrow_check;
+              }
+            }
+          }
+        }
+      }
+      done_borrow_check:;
+    }
     args.push_back(receiver);
+  }
   for (auto *arg : e->getArgs()) {
     mlir::Value v = visitExpr(arg);
     if (v)
@@ -3393,6 +3433,18 @@ mlir::Value HIRBuilder::visitFieldAccessExpr(FieldAccessExpr *e) {
     ++fieldIdx;
   }
   if (fieldIdx >= sd->getFields().size()) return base;
+
+  // If base is an own.val (from own.alloc wrapping a struct literal),
+  // unwrap to get the underlying pointer for field access.
+  if (mlir::isa<own::OwnValType>(base.getType())) {
+    // own.alloc takes a pointer operand — get it from the defining op.
+    if (auto *defOp = base.getDefiningOp()) {
+      if (defOp->getName().getStringRef() == "own.alloc" &&
+          defOp->getNumOperands() > 0) {
+        base = defOp->getOperand(0);
+      }
+    }
+  }
 
   // If base is a pointer (from alloca/malloc), emit GEP + load.
   auto ptrType = getPtrType();
