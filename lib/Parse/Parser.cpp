@@ -256,8 +256,8 @@ Type *Parser::parsePrimaryType() {
       }
     }
     expect(tok::r_paren);
-    // Check for function type: (T1, T2) -> ReturnType
-    if (tok.is(tok::arrow)) {
+    // Check for function type: (T1, T2) -> ReturnType  or  (T1, T2) => ReturnType
+    if (tok.is(tok::arrow) || tok.is(tok::fat_arrow)) {
       advance();
       Type *retType = parseType();
       return ctx.create<FunctionType>(std::move(elements), retType, loc);
