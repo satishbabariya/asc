@@ -123,6 +123,40 @@ PanicInfo *__asc_get_panic_info(void) {
     return &__asc_panic_info;
 }
 
+void __asc_top_level_panic_handler(void) {
+  PanicInfo *info = __asc_get_panic_info();
+#ifndef __wasm__
+  extern long write(int fd, const void *buf, unsigned long count);
+  extern void _exit(int);
+  const char *prefix = "thread 'main' panicked at '";
+  write(2, prefix, 27);
+  if (info->msg && info->msg_len > 0)
+    write(2, info->msg, info->msg_len);
+  const char *mid = "', ";
+  write(2, mid, 3);
+  if (info->file && info->file_len > 0)
+    write(2, info->file, info->file_len);
+  const char *colon = ":";
+  write(2, colon, 1);
+  // Write line number as decimal.
+  char linebuf[16];
+  int len = 0;
+  unsigned int line = info->line;
+  if (line == 0) { linebuf[len++] = '0'; }
+  else {
+    char tmp[16]; int tlen = 0;
+    while (line > 0) { tmp[tlen++] = '0' + (line % 10); line /= 10; }
+    for (int i = tlen - 1; i >= 0; i--) linebuf[len++] = tmp[i];
+  }
+  write(2, linebuf, len);
+  const char *nl = "\n";
+  write(2, nl, 1);
+  _exit(101);
+#else
+  __builtin_trap();
+#endif
+}
+
 // Register/clear a setjmp-based panic handler for drop-on-panic.
 void __asc_set_panic_handler(void *buf) {
 #ifndef __wasm__
