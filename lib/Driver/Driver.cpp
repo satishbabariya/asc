@@ -16,6 +16,7 @@
 #include "asc/Analysis/PanicScopeWrap.h"
 #include "asc/Analysis/StackSizeAnalysis.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Transforms/Passes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/StringSet.h"
@@ -793,6 +794,9 @@ ExitCode Driver::runTransforms() {
   // via OperationState strings. These are erased by OwnershipLowering.
   // Verifier must be off here until these ops are properly registered.
   pm.enableVerifier(false);
+
+  // Canonicalize: fold constant arithmetic, simplify ops.
+  pm.addPass(mlir::createCanonicalizerPass());
 
   pm.addPass(createEscapeAnalysisPass());
   pm.addPass(createStackSizeAnalysisPass());
