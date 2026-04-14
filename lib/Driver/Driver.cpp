@@ -108,6 +108,8 @@ ExitCode Driver::parseArgs(int argc, char **argv) {
       }
     } else if (arg == "-o" && i + 1 < argc) {
       opts.outputFile = argv[++i];
+    } else if (arg == "--wasm-features" && i + 1 < argc) {
+      opts.wasmFeatures = argv[++i];
     } else if (arg.starts_with("-")) {
       llvm::errs() << "error: unknown option '" << arg << "'\n";
       return ExitCode::UsageError;
@@ -899,6 +901,7 @@ ExitCode Driver::runCodeGen() {
   cgOpts.optLevel = opts.optLevel;
   cgOpts.debugInfo = opts.debugInfo;
   cgOpts.outputFile = opts.outputFile;
+  cgOpts.wasmFeatures = opts.wasmFeatures;
 
   // Default output file.
   if (cgOpts.outputFile.empty() && opts.emitKind == EmitKind::Wasm) {
@@ -945,6 +948,7 @@ void Driver::printUsage(llvm::raw_ostream &os) {
   os << "  --opt <level>           Optimization: 0|1|2|3|s|z\n";
   os << "  --debug                 Emit debug info\n";
   os << "  --error-format <fmt>    human|json|github-actions\n";
+  os << "  --wasm-features <list>  Wasm target features (e.g. +bulk-memory,+sign-ext)\n";
   os << "  --verbose               Print pipeline timings\n";
   os << "  -o <file>               Output file\n";
 }

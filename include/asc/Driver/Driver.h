@@ -41,6 +41,7 @@ struct DriverOptions {
   bool verbose = false;
   bool printMLIR = false;   // --emit mlir
   bool printLLVMIR = false; // --emit llvmir
+  std::string wasmFeatures; // --wasm-features (e.g. "+bulk-memory,+sign-ext")
 };
 
 /// The driver ties the full compiler pipeline together.

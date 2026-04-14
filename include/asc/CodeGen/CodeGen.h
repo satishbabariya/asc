@@ -44,6 +44,9 @@ struct CodeGenOptions {
 
   /// Output filename ("" means stdout).
   std::string outputFile;
+
+  /// Wasm target features override (e.g. "+bulk-memory,+mutable-globals").
+  std::string wasmFeatures;
 };
 
 /// Code generator — final stage of the compiler pipeline.

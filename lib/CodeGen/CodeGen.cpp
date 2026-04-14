@@ -170,9 +170,14 @@ bool CodeGenerator::setupTargetMachine() {
   llvm::Triple triple(opts.targetTriple);
   if (triple.isWasm()) {
     cpu = "generic";
-    // Enable bulk-memory for memcpy, mutable-globals for TLS, tail-call for
-    // recursive ownership patterns, sign-ext for integer operations.
-    features = "+bulk-memory,+mutable-globals,+sign-ext,+tail-call";
+    if (!opts.wasmFeatures.empty()) {
+      // Use user-specified features (e.g. --wasm-features "+bulk-memory,+sign-ext").
+      features = opts.wasmFeatures;
+    } else {
+      // Default features: bulk-memory for memcpy, mutable-globals for TLS,
+      // sign-ext for integer operations.
+      features = "+bulk-memory,+mutable-globals,+sign-ext";
+    }
   }
   // Use O0 for the legacy PM codegen on all targets. Optimization is handled
   // by the new-PM in runLLVMOptPasses(). The legacy PM crashes at O2+ due to
