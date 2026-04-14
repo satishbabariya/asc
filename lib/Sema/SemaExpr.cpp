@@ -133,6 +133,18 @@ Type *Sema::checkExpr(Expr *e) {
     result = checkExpr(pe->getInner());
     break;
   }
+  case ExprKind::TaskScope: {
+    auto *ts = static_cast<TaskScopeExpr *>(e);
+    if (ts->getBody()) {
+      pushScope();
+      for (auto *s : ts->getBody()->getStmts())
+        checkStmt(s);
+      if (ts->getBody()->getTrailingExpr())
+        result = checkExpr(ts->getBody()->getTrailingExpr());
+      popScope();
+    }
+    break;
+  }
   }
 
   if (result)
@@ -599,7 +611,7 @@ Type *Sema::checkMatchExpr(MatchExpr *e) {
             if (!path.empty())
               matchedVariants.insert(path.back());
           }
-          if (auto *ip = dynamic_cast<IdentPattern *>(arm.pattern)) {
+          if (dynamic_cast<IdentPattern *>(arm.pattern)) {
             // A bare identifier pattern acts as a wildcard binding.
             hasWildcard = true;
             break;

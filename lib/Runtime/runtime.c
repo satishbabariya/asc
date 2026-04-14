@@ -42,6 +42,58 @@ void *memset(void *dst, int c, unsigned long n) {
 
 #endif // __wasm__
 
+/* ── Thread-Local Arena Allocator ────────────────────────────── */
+
+#ifndef __wasm__
+extern void *malloc(unsigned long size);
+extern void free(void *ptr);
+#endif
+
+#define ASC_DEFAULT_ARENA_SIZE (1024 * 1024) /* 1 MB */
+
+#ifdef __wasm__
+static unsigned char __asc_arena_buf[ASC_DEFAULT_ARENA_SIZE];
+static unsigned char *__asc_arena_ptr = __asc_arena_buf;
+static unsigned char *__asc_arena_end = __asc_arena_buf + ASC_DEFAULT_ARENA_SIZE;
+#else
+_Thread_local static unsigned char *__asc_arena_buf = 0;
+_Thread_local static unsigned char *__asc_arena_ptr = 0;
+_Thread_local static unsigned char *__asc_arena_end = 0;
+#endif
+
+void __asc_arena_init(unsigned long size) {
+#ifndef __wasm__
+  if (__asc_arena_buf) free(__asc_arena_buf);
+  __asc_arena_buf = (unsigned char *)malloc(size);
+  __asc_arena_ptr = __asc_arena_buf;
+  __asc_arena_end = __asc_arena_buf + size;
+#endif
+}
+
+void *__asc_arena_alloc(unsigned long size, unsigned long align) {
+  unsigned long addr = (unsigned long)__asc_arena_ptr;
+  unsigned long aligned = (addr + align - 1) & ~(align - 1);
+  unsigned char *result = (unsigned char *)aligned;
+  if (result + size > __asc_arena_end) return 0;
+  __asc_arena_ptr = result + size;
+  return result;
+}
+
+void __asc_arena_reset(void) {
+  __asc_arena_ptr = __asc_arena_buf;
+}
+
+void __asc_arena_destroy(void) {
+#ifndef __wasm__
+  if (__asc_arena_buf) {
+    free(__asc_arena_buf);
+    __asc_arena_buf = 0;
+    __asc_arena_ptr = 0;
+    __asc_arena_end = 0;
+  }
+#endif
+}
+
 // Thread-local unwind flag and panic handler for drop-on-panic.
 #ifdef __wasm__
 static int __asc_in_unwind = 0;
@@ -69,6 +121,40 @@ _Thread_local static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
 
 PanicInfo *__asc_get_panic_info(void) {
     return &__asc_panic_info;
+}
+
+void __asc_top_level_panic_handler(void) {
+  PanicInfo *info = __asc_get_panic_info();
+#ifndef __wasm__
+  extern long write(int fd, const void *buf, unsigned long count);
+  extern void _exit(int);
+  const char *prefix = "thread 'main' panicked at '";
+  write(2, prefix, 27);
+  if (info->msg && info->msg_len > 0)
+    write(2, info->msg, info->msg_len);
+  const char *mid = "', ";
+  write(2, mid, 3);
+  if (info->file && info->file_len > 0)
+    write(2, info->file, info->file_len);
+  const char *colon = ":";
+  write(2, colon, 1);
+  // Write line number as decimal.
+  char linebuf[16];
+  int len = 0;
+  unsigned int line = info->line;
+  if (line == 0) { linebuf[len++] = '0'; }
+  else {
+    char tmp[16]; int tlen = 0;
+    while (line > 0) { tmp[tlen++] = '0' + (line % 10); line /= 10; }
+    for (int i = tlen - 1; i >= 0; i--) linebuf[len++] = tmp[i];
+  }
+  write(2, linebuf, len);
+  const char *nl = "\n";
+  write(2, nl, 1);
+  _exit(101);
+#else
+  __builtin_trap();
+#endif
 }
 
 // Register/clear a setjmp-based panic handler for drop-on-panic.

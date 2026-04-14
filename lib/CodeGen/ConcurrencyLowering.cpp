@@ -50,6 +50,20 @@ void ConcurrencyLoweringPass::declareRuntimeFunctions(mlir::ModuleOp module) {
     auto ty = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
     builder.create<mlir::LLVM::LLVMFuncOp>(loc, "free", ty);
   }
+
+  // SPSC channel ref-counted drop/clone (available on all targets).
+  {
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(module.getContext());
+    if (!module.lookupSymbol("__asc_chan_drop")) {
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_chan_drop", fnType);
+    }
+    if (!module.lookupSymbol("__asc_chan_clone")) {
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_chan_clone", fnType);
+    }
+  }
+
   if (!isWasmTarget()) {
     if (!module.lookupSymbol("pthread_create")) {
       auto ty = mlir::LLVM::LLVMFunctionType::get(i32Type,
@@ -59,6 +73,32 @@ void ConcurrencyLoweringPass::declareRuntimeFunctions(mlir::ModuleOp module) {
     if (!module.lookupSymbol("pthread_join")) {
       auto ty = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType});
       builder.create<mlir::LLVM::LLVMFuncOp>(loc, "pthread_join", ty);
+    }
+
+    // MPMC channel functions.
+    auto ctx = module.getContext();
+    if (!module.lookupSymbol("__asc_mpmc_chan_create")) {
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i32Type, i32Type});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_mpmc_chan_create", fnType);
+    }
+    if (!module.lookupSymbol("__asc_mpmc_chan_send")) {
+      auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {ptrType, ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_mpmc_chan_send", fnType);
+    }
+    if (!module.lookupSymbol("__asc_mpmc_chan_recv")) {
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_mpmc_chan_recv", fnType);
+    }
+    if (!module.lookupSymbol("__asc_mpmc_chan_drop")) {
+      auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_mpmc_chan_drop", fnType);
+    }
+    if (!module.lookupSymbol("__asc_mpmc_chan_clone")) {
+      auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_mpmc_chan_clone", fnType);
     }
   }
 }

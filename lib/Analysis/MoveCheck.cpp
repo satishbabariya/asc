@@ -224,12 +224,24 @@ void MoveCheckPass::reportUseAfterMove(mlir::Operation *use,
                                         mlir::Value value,
                                         mlir::Operation *moveOp) {
   mlir::InFlightDiagnostic diag =
-      use->emitError() << "use of moved value";
+      use->emitError() << "[E004] use of moved value";
   if (moveOp) {
     diag.attachNote(moveOp->getLoc()) << "value was moved here";
   }
   if (auto *defOp = value.getDefiningOp()) {
     diag.attachNote(defOp->getLoc()) << "value was defined here";
+  }
+  // Show the first use site of the moved value (before the move) for context.
+  if (moveOp && value.getDefiningOp()) {
+    for (mlir::OpOperand &u : value.getUses()) {
+      mlir::Operation *useOp = u.getOwner();
+      if (useOp != use && useOp != moveOp &&
+          useOp->getBlock() == moveOp->getBlock() &&
+          useOp->isBeforeInBlock(moveOp)) {
+        diag.attachNote(useOp->getLoc()) << "value previously used here";
+        break;
+      }
+    }
   }
   signalPassFailure();
 }
@@ -238,9 +250,12 @@ void MoveCheckPass::reportDoubleMove(mlir::Operation *secondMove,
                                       mlir::Value value,
                                       mlir::Operation *firstMove) {
   mlir::InFlightDiagnostic diag =
-      secondMove->emitError() << "value moved more than once";
+      secondMove->emitError() << "[E004] value moved more than once";
   if (firstMove) {
     diag.attachNote(firstMove->getLoc()) << "value was first moved here";
+  }
+  if (auto *defOp = value.getDefiningOp()) {
+    diag.attachNote(defOp->getLoc()) << "value was defined here";
   }
   signalPassFailure();
 }

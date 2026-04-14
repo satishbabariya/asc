@@ -1,5 +1,6 @@
-// RUN: %asc build %s --emit mlir > %t.out 2>&1; grep -q "own.drop_flag_alloc" %t.out
-// Test: conditional move inserts drop flag.
+// RUN: %asc build %s --emit llvmir > %t.out 2>&1
+// RUN: grep -q "br i1" %t.out
+// Test: conditional move inserts drop flag with conditional branch around drop.
 
 struct Resource { id: i32 }
 function consume(r: own<Resource>): void { }

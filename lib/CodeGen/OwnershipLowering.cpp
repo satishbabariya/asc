@@ -66,6 +66,32 @@ struct OwnershipLoweringPass
     auto ptrType = mlir::LLVM::LLVMPointerType::get(ctx);
     auto i64Type = mlir::IntegerType::get(ctx, 64);
 
+    // Arena allocator declarations.
+    {
+      auto loc = module.getLoc();
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      if (!module.lookupSymbol("__asc_arena_alloc")) {
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type, i64Type});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_alloc", fnType);
+      }
+      if (!module.lookupSymbol("__asc_arena_init")) {
+        auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {i64Type});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_init", fnType);
+      }
+      if (!module.lookupSymbol("__asc_arena_reset")) {
+        auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_reset", fnType);
+      }
+      if (!module.lookupSymbol("__asc_arena_destroy")) {
+        auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_destroy", fnType);
+      }
+    }
+
     for (auto *op : opsToLower) {
       builder.setInsertionPoint(op);
       llvm::StringRef name = op->getName().getStringRef();
@@ -82,9 +108,54 @@ struct OwnershipLoweringPass
           if (escapeAttr.getValue() == "must_heap")
             useHeap = true;
         }
+
+        // Check if the operand is a pointer (e.g., from struct literal alloca).
+        // In that case the struct data is already stored in the operand alloca,
+        // so we must reuse it (stack) or memcpy from it (heap).
+        bool hasPointerInit = op->getNumOperands() > 0 &&
+            mlir::isa<mlir::LLVM::LLVMPointerType>(op->getOperand(0).getType());
+
+        // Compute struct size from the alloca's element type if available.
+        uint64_t structSize = 0;
+        mlir::LLVM::AllocaOp initAlloca;
+        if (hasPointerInit) {
+          if (auto *defOp = op->getOperand(0).getDefiningOp()) {
+            initAlloca = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp);
+            if (initAlloca) {
+              if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                      initAlloca.getElemType())) {
+                for (mlir::Type fieldTy : structTy.getBody()) {
+                  if (fieldTy.isIntOrIndexOrFloat())
+                    structSize += (fieldTy.getIntOrFloatBitWidth() + 7) / 8;
+                  else
+                    structSize += 8; // Pointer-sized default.
+                }
+                if (structSize == 0) structSize = 8;
+              }
+            }
+          }
+        }
+
         mlir::Value result;
 
-        if (useHeap) {
+        if (hasPointerInit && initAlloca) {
+          // Operand is a struct alloca with data already stored in it.
+          if (useHeap) {
+            // Heap: malloc + memcpy from the original alloca.
+            auto mallocFn = getOrInsertMalloc(module, builder);
+            uint64_t allocSize = structSize > 0 ? structSize : size;
+            auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)allocSize);
+            auto callOp = builder.create<mlir::LLVM::CallOp>(loc, mallocFn, mlir::ValueRange{sizeVal});
+            result = callOp.getResult();
+            // Copy struct data from stack alloca to heap allocation.
+            auto falseCst = builder.create<mlir::LLVM::ConstantOp>(
+                loc, mlir::IntegerType::get(ctx, 1), (int64_t)0);
+            builder.create<mlir::LLVM::MemcpyOp>(loc, result, op->getOperand(0), sizeVal, falseCst);
+          } else {
+            // Stack-safe: forward the original alloca pointer directly.
+            result = op->getOperand(0);
+          }
+        } else if (useHeap) {
           // @heap: allocate on heap via malloc.
           auto mallocFn = getOrInsertMalloc(module, builder);
           auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)size);
@@ -233,11 +304,25 @@ struct OwnershipLoweringPass
             auto flagPtr = op->getOperand(1);
             auto i1Ty = mlir::IntegerType::get(ctx, 1);
             // Load the drop flag to check if value is still alive (not moved).
-            // The flag value is emitted for the optimizer to use; full
-            // conditional branching will be added in a future enhancement.
             auto flagLoad =
                 builder.create<mlir::LLVM::LoadOp>(loc, i1Ty, flagPtr);
-            (void)flagLoad;
+
+            // Split block: check → drop (conditional) → merge (continue).
+            mlir::Block *checkBlock = op->getBlock();
+            mlir::Block *mergeBlock = checkBlock->splitBlock(op);
+            auto *parentRegion = checkBlock->getParent();
+            mlir::Block *dropBlock = new mlir::Block();
+            parentRegion->getBlocks().insertAfter(
+                mlir::Region::iterator(checkBlock), dropBlock);
+
+            // check-block: branch to drop-block if flag is true (still alive),
+            // otherwise skip to merge-block.
+            builder.setInsertionPointToEnd(checkBlock);
+            builder.create<mlir::LLVM::CondBrOp>(loc, flagLoad, dropBlock,
+                                                  mergeBlock);
+
+            // drop-block: emit destructor call and free, then branch to merge.
+            builder.setInsertionPointToStart(dropBlock);
 
             // Check for custom Drop destructor.
             if (auto typeNameAttr =
@@ -263,12 +348,9 @@ struct OwnershipLoweringPass
               builder.create<mlir::LLVM::CallOp>(loc, freeFn,
                                                   mlir::ValueRange{val});
             }
-            // Note: The flag check (drop_flag_check/load) provides the
-            // conditional. Full conditional branching requires SCF or CF
-            // dialect ops which are complex to emit here. For MVP, the flag
-            // alloca+store+load pattern is emitted; the optimizer will see
-            // the flag and can use it. The flag value is available for
-            // future enhancement with proper conditional branching.
+
+            builder.create<mlir::LLVM::BrOp>(loc, mlir::ValueRange{},
+                                              mergeBlock);
           } else {
             // Unconditional drop (normal case).
 

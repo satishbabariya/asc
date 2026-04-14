@@ -460,6 +460,7 @@ Expr *Parser::parsePrimaryExpr() {
   }
 
   // task.spawn(closure) — parse as method call on 'task' namespace.
+  // task.scope { block } — scoped thread block (RFC-0007).
   if (tok.is(tok::kw_task) && lexer.peek().is(tok::dot)) {
     advance(); // task
     advance(); // .
@@ -467,6 +468,12 @@ Expr *Parser::parsePrimaryExpr() {
     if (tok.is(tok::identifier)) {
       methodName = tok.getSpelling().str();
       advance();
+    }
+    // task.scope { block } — scoped threads: all spawned handles are
+    // automatically joined before the scope exits.
+    if (methodName == "scope" && tok.is(tok::l_brace)) {
+      auto *body = parseBlock();
+      return ctx.create<TaskScopeExpr>(body, loc);
     }
     expect(tok::l_paren);
     auto spawnArgs = parseArgList();
