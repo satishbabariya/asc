@@ -8,6 +8,7 @@ add_library(ascAnalysis
   EscapeAnalysis.cpp
   DropInsertion.cpp
   PanicScopeWrap.cpp
+  StackSizeAnalysis.cpp
 )
 
 target_link_libraries(ascAnalysis

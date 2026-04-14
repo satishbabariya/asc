@@ -14,6 +14,7 @@
 #include "asc/Analysis/EscapeAnalysis.h"
 #include "asc/Analysis/DropInsertion.h"
 #include "asc/Analysis/PanicScopeWrap.h"
+#include "asc/Analysis/StackSizeAnalysis.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
@@ -794,6 +795,7 @@ ExitCode Driver::runTransforms() {
   pm.enableVerifier(false);
 
   pm.addPass(createEscapeAnalysisPass());
+  pm.addPass(createStackSizeAnalysisPass());
   pm.addNestedPass<mlir::func::FuncOp>(createDropInsertionPass());
   pm.addNestedPass<mlir::func::FuncOp>(createPanicScopeWrapPass());
 
