@@ -46,6 +46,74 @@ void Sema::checkStructDecl(StructDecl *d) {
   sym.decl = d;
   currentScope->declare(d->getName(), std::move(sym));
 
+  // Expand @derive(...) attributes into concrete trait attributes.
+  // Must run before the @copy/@send/@sync validation below so that
+  // derive-generated attributes are included in the checks.
+  {
+    // Snapshot current attributes — iterating while mutating is UB.
+    auto attrs = d->getAttributes();
+    for (const auto &attr : attrs) {
+      if (attr.size() > 9 && attr.substr(0, 8) == "@derive(" &&
+          attr.back() == ')') {
+        // Extract comma-separated trait names from @derive(T1, T2, ...).
+        std::string inner = attr.substr(8, attr.size() - 9);
+        // Split on comma and trim whitespace.
+        size_t pos = 0;
+        while (pos < inner.size()) {
+          // Skip leading whitespace.
+          while (pos < inner.size() && inner[pos] == ' ')
+            ++pos;
+          size_t end = inner.find(',', pos);
+          if (end == std::string::npos)
+            end = inner.size();
+          // Trim trailing whitespace from this segment.
+          size_t segEnd = end;
+          while (segEnd > pos && inner[segEnd - 1] == ' ')
+            --segEnd;
+          std::string traitName = inner.substr(pos, segEnd - pos);
+
+          if (traitName == "Clone") {
+            d->addAttribute("@clone");
+          } else if (traitName == "Copy") {
+            // derive(Copy) validates all fields are Copy types, then adds @copy.
+            bool allCopy = true;
+            for (auto *field : d->getFields()) {
+              if (field->getType() && !isCopyType(field->getType())) {
+                diags.emitError(
+                    field->getLocation(), DiagID::ErrMissingCopyAttribute,
+                    "field '" + field->getName().str() +
+                        "' is not Copy; cannot derive Copy for '" +
+                        d->getName().str() + "'");
+                allCopy = false;
+              }
+            }
+            if (allCopy)
+              d->addAttribute("@copy");
+          } else if (traitName == "PartialEq") {
+            d->addAttribute("@partialeq");
+          } else if (traitName == "Eq") {
+            d->addAttribute("@eq");
+          } else if (traitName == "Send") {
+            d->addAttribute("@send");
+          } else if (traitName == "Sync") {
+            d->addAttribute("@sync");
+          } else if (traitName == "Default") {
+            d->addAttribute("@default");
+          } else if (traitName == "Debug") {
+            d->addAttribute("@debug");
+          } else if (traitName == "Hash") {
+            d->addAttribute("@hash");
+          } else if (!traitName.empty()) {
+            diags.emitError(d->getLocation(), DiagID::ErrTraitNotImplemented,
+                            "unknown derive trait '" + traitName + "'");
+          }
+
+          pos = end + 1; // skip the comma
+        }
+      }
+    }
+  }
+
   // Parse attributes.
   bool hasCopy = false, hasSend = false, hasSync = false;
   for (const auto &attr : d->getAttributes()) {

@@ -16,6 +16,7 @@
 #include "asc/Analysis/PanicScopeWrap.h"
 #include "asc/Analysis/StackSizeAnalysis.h"
 #include "mlir/IR/Diagnostics.h"
+#include "mlir/Transforms/Passes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/StringSet.h"
@@ -107,6 +108,8 @@ ExitCode Driver::parseArgs(int argc, char **argv) {
       }
     } else if (arg == "-o" && i + 1 < argc) {
       opts.outputFile = argv[++i];
+    } else if (arg == "--wasm-features" && i + 1 < argc) {
+      opts.wasmFeatures = argv[++i];
     } else if (arg.starts_with("-")) {
       llvm::errs() << "error: unknown option '" << arg << "'\n";
       return ExitCode::UsageError;
@@ -422,6 +425,7 @@ ExitCode Driver::runLsp() {
             R"({"jsonrpc":"2.0","id":0,"result":{"capabilities":{)"
             R"("textDocumentSync":1,)"
             R"("hoverProvider":true,)"
+            R"("definitionProvider":true,)"
             R"("completionProvider":{"triggerCharacters":[".","::"]},)"
             R"("diagnosticProvider":{"interFileDependencies":false,"workspaceDiagnostics":false})"
             R"(},"serverInfo":{"name":"asc","version":"0.1.0"}}})";
@@ -575,6 +579,27 @@ ExitCode Driver::runLsp() {
             R"({"jsonrpc":"2.0","id":)" + reqId +
             R"(,"result":{"contents":{"kind":"plaintext","value":")" +
             hoverContent + R"("}}})";
+        llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
+                     << response;
+        llvm::outs().flush();
+        continue;
+      }
+
+      // Handle textDocument/definition — stub returning null (no location).
+      // A full implementation would resolve symbols to their definition site.
+      if (body.find("\"textDocument/definition\"") != std::string::npos) {
+        std::string reqId = "0";
+        auto idPos = body.find("\"id\"");
+        if (idPos != std::string::npos) {
+          auto start = body.find_first_of("0123456789", idPos + 4);
+          auto end = body.find_first_not_of("0123456789", start);
+          if (start != std::string::npos)
+            reqId = body.substr(start, end - start);
+        }
+
+        std::string response =
+            R"({"jsonrpc":"2.0","id":)" + reqId +
+            R"(,"result":null})";
         llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
                      << response;
         llvm::outs().flush();
@@ -794,6 +819,9 @@ ExitCode Driver::runTransforms() {
   // Verifier must be off here until these ops are properly registered.
   pm.enableVerifier(false);
 
+  // Canonicalize: fold constant arithmetic, simplify ops.
+  pm.addPass(mlir::createCanonicalizerPass());
+
   pm.addPass(createEscapeAnalysisPass());
   pm.addPass(createStackSizeAnalysisPass());
   pm.addNestedPass<mlir::func::FuncOp>(createDropInsertionPass());
@@ -895,6 +923,7 @@ ExitCode Driver::runCodeGen() {
   cgOpts.optLevel = opts.optLevel;
   cgOpts.debugInfo = opts.debugInfo;
   cgOpts.outputFile = opts.outputFile;
+  cgOpts.wasmFeatures = opts.wasmFeatures;
 
   // Default output file.
   if (cgOpts.outputFile.empty() && opts.emitKind == EmitKind::Wasm) {
@@ -941,6 +970,7 @@ void Driver::printUsage(llvm::raw_ostream &os) {
   os << "  --opt <level>           Optimization: 0|1|2|3|s|z\n";
   os << "  --debug                 Emit debug info\n";
   os << "  --error-format <fmt>    human|json|github-actions\n";
+  os << "  --wasm-features <list>  Wasm target features (e.g. +bulk-memory,+sign-ext)\n";
   os << "  --verbose               Print pipeline timings\n";
   os << "  -o <file>               Output file\n";
 }

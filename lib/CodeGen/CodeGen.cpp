@@ -126,8 +126,17 @@ bool CodeGenerator::translateToLLVMIR(mlir::ModuleOp module) {
   }
   llvmModule->setTargetTriple(opts.targetTriple);
 
+  // Warn about experimental GPU targets.
+  llvm::Triple triple(opts.targetTriple);
+  if (triple.isNVPTX() || triple.isAMDGCN()) {
+    llvm::errs() << "warning: GPU target support is experimental\n";
+  }
+
   // Add DWARF debug info if requested.
   if (opts.debugInfo) {
+    llvmModule->addModuleFlag(llvm::Module::Warning, "Debug Info Version",
+                              llvm::DEBUG_METADATA_VERSION);
+    llvmModule->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 4);
     addDebugInfo();
   }
 
@@ -170,9 +179,14 @@ bool CodeGenerator::setupTargetMachine() {
   llvm::Triple triple(opts.targetTriple);
   if (triple.isWasm()) {
     cpu = "generic";
-    // Enable bulk-memory for memcpy, mutable-globals for TLS, tail-call for
-    // recursive ownership patterns, sign-ext for integer operations.
-    features = "+bulk-memory,+mutable-globals,+sign-ext,+tail-call";
+    if (!opts.wasmFeatures.empty()) {
+      // Use user-specified features (e.g. --wasm-features "+bulk-memory,+sign-ext").
+      features = opts.wasmFeatures;
+    } else {
+      // Default features: bulk-memory for memcpy, mutable-globals for TLS,
+      // sign-ext for integer operations.
+      features = "+bulk-memory,+mutable-globals,+sign-ext";
+    }
   }
   // Use O0 for the legacy PM codegen on all targets. Optimization is handled
   // by the new-PM in runLLVMOptPasses(). The legacy PM crashes at O2+ due to
@@ -295,7 +309,7 @@ void CodeGenerator::addDebugInfo() {
   // Try to get the actual source file from the module metadata or opts.
   if (srcFile.empty()) srcFile = "<stdin>";
   auto *file = dib.createFile(srcFile, srcDir);
-  auto *cu = dib.createCompileUnit(
+  (void)dib.createCompileUnit(
       llvm::dwarf::DW_LANG_C, file, "asc 0.1.0",
       opts.optLevel != OptLevel::O0, /*Flags=*/"", /*RV=*/0);
 
