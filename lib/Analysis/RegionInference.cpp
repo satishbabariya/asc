@@ -137,6 +137,11 @@ void RegionInferencePass::assignInitialRegions(mlir::func::FuncOp func) {
       result.regions.resize(regionId + 1);
     result.regions[regionId] = std::move(region);
     result.valueToRegion[borrowVal] = regionId;
+
+    // Annotate the borrow op with its region ID for downstream passes.
+    op->setAttr("regionId",
+        mlir::IntegerAttr::get(
+            mlir::IntegerType::get(op->getContext(), 32), regionId));
   });
 }
 

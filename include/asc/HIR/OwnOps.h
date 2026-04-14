@@ -129,7 +129,10 @@ class BorrowRefOp
 public:
   using Op::Op;
   static llvm::StringRef getOperationName() { return "own.borrow_ref"; }
-  static llvm::ArrayRef<llvm::StringRef> getAttributeNames() { return {}; }
+  static llvm::ArrayRef<llvm::StringRef> getAttributeNames() {
+    static llvm::StringRef names[] = {"regionId"};
+    return names;
+  }
 
   static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
                     mlir::Value ownedValue);
@@ -143,7 +146,10 @@ class BorrowMutOp
 public:
   using Op::Op;
   static llvm::StringRef getOperationName() { return "own.borrow_mut"; }
-  static llvm::ArrayRef<llvm::StringRef> getAttributeNames() { return {}; }
+  static llvm::ArrayRef<llvm::StringRef> getAttributeNames() {
+    static llvm::StringRef names[] = {"regionId"};
+    return names;
+  }
 
   static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
                     mlir::Value ownedValue);

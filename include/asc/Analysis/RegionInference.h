@@ -8,6 +8,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace asc {
 
@@ -80,6 +81,14 @@ public:
 
   /// Check if a borrow is live at a given CFG point.
   bool isLiveAt(RegionID region, CFGPoint point) const;
+
+  /// Get the region for a borrow value, if assigned.
+  std::optional<RegionID> getRegionForBorrow(mlir::Value borrowVal) const {
+    auto it = valueToRegion.find(borrowVal);
+    if (it != valueToRegion.end())
+      return it->second;
+    return std::nullopt;
+  }
 
 private:
   friend class RegionInferencePass;
