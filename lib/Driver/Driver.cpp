@@ -425,6 +425,7 @@ ExitCode Driver::runLsp() {
             R"({"jsonrpc":"2.0","id":0,"result":{"capabilities":{)"
             R"("textDocumentSync":1,)"
             R"("hoverProvider":true,)"
+            R"("definitionProvider":true,)"
             R"("completionProvider":{"triggerCharacters":[".","::"]},)"
             R"("diagnosticProvider":{"interFileDependencies":false,"workspaceDiagnostics":false})"
             R"(},"serverInfo":{"name":"asc","version":"0.1.0"}}})";
@@ -578,6 +579,27 @@ ExitCode Driver::runLsp() {
             R"({"jsonrpc":"2.0","id":)" + reqId +
             R"(,"result":{"contents":{"kind":"plaintext","value":")" +
             hoverContent + R"("}}})";
+        llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
+                     << response;
+        llvm::outs().flush();
+        continue;
+      }
+
+      // Handle textDocument/definition — stub returning null (no location).
+      // A full implementation would resolve symbols to their definition site.
+      if (body.find("\"textDocument/definition\"") != std::string::npos) {
+        std::string reqId = "0";
+        auto idPos = body.find("\"id\"");
+        if (idPos != std::string::npos) {
+          auto start = body.find_first_of("0123456789", idPos + 4);
+          auto end = body.find_first_not_of("0123456789", start);
+          if (start != std::string::npos)
+            reqId = body.substr(start, end - start);
+        }
+
+        std::string response =
+            R"({"jsonrpc":"2.0","id":)" + reqId +
+            R"(,"result":null})";
         llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
                      << response;
         llvm::outs().flush();
