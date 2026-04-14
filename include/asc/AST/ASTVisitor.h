@@ -156,6 +156,8 @@ public:
       return getDerived().visitPathExpr(static_cast<PathExpr *>(e));
     case ExprKind::Paren:
       return getDerived().visitParenExpr(static_cast<ParenExpr *>(e));
+    case ExprKind::TaskScope:
+      return getDerived().visitTaskScopeExpr(static_cast<TaskScopeExpr *>(e));
     }
     return RetTy();
   }
@@ -222,6 +224,7 @@ public:
   DEFAULT_VISIT(TryExpr)
   DEFAULT_VISIT(PathExpr)
   DEFAULT_VISIT(ParenExpr)
+  DEFAULT_VISIT(TaskScopeExpr)
 
 #undef DEFAULT_VISIT
 };

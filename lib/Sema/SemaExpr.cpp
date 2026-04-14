@@ -133,6 +133,18 @@ Type *Sema::checkExpr(Expr *e) {
     result = checkExpr(pe->getInner());
     break;
   }
+  case ExprKind::TaskScope: {
+    auto *ts = static_cast<TaskScopeExpr *>(e);
+    if (ts->getBody()) {
+      pushScope();
+      for (auto *s : ts->getBody()->getStmts())
+        checkStmt(s);
+      if (ts->getBody()->getTrailingExpr())
+        result = checkExpr(ts->getBody()->getTrailingExpr());
+      popScope();
+    }
+    break;
+  }
   }
 
   if (result)

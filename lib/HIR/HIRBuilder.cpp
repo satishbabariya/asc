@@ -3582,6 +3582,15 @@ static void collectFreeVars(Expr *expr, llvm::StringSet<> &paramNames,
     collectFreeVars(paren->getInner(), paramNames, freeVars);
     return;
   }
+  if (auto *ts = dynamic_cast<TaskScopeExpr *>(expr)) {
+    if (ts->getBody()) {
+      for (auto *stmt : ts->getBody()->getStmts()) {
+        if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
+          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
+      }
+    }
+    return;
+  }
   // For other expression types, the current level of capture analysis
   // is sufficient — if more complex closures are needed, extend here.
 }
@@ -4814,6 +4823,11 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         builder.create<mlir::LLVM::CallOp>(location, pthreadCreateFn,
             mlir::ValueRange{tidAlloca, nullAttr, wrapperAddr, threadArg});
 
+        // If we're inside a task.scope block, record this handle for
+        // automatic join at scope exit (RFC-0007 scoped threads).
+        if (!taskScopeHandleStack.empty())
+          taskScopeHandleStack.back().push_back(tidAlloca);
+
         return tidAlloca; // handle = pointer to thread_id
       }
     }
@@ -4822,6 +4836,8 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
   }
 
   // Task join: pthread_join(handle).
+  // The handle from task_spawn is a pointer to the pthread_t (an alloca).
+  // We must load the actual pthread_t value before passing to pthread_join.
   if (name == "task_join") {
     if (!e->getArgs().empty()) {
       mlir::Value handle = visitExpr(e->getArgs()[0]);
@@ -4838,9 +4854,12 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
               location, "pthread_join", fnType);
         }
 
+        // Load the pthread_t from the handle alloca (task_spawn stores
+        // the thread id into this alloca via pthread_create).
+        auto tid = builder.create<mlir::LLVM::LoadOp>(location, ptrType, handle);
         auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
         builder.create<mlir::LLVM::CallOp>(location, pthreadJoinFn,
-            mlir::ValueRange{handle, nullArg});
+            mlir::ValueRange{tid, nullArg});
       }
     }
     return {};
@@ -4853,6 +4872,44 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
 }
 mlir::Value HIRBuilder::visitUnsafeBlockExpr(UnsafeBlockExpr *e) {
   return visitCompoundStmt(e->getBody());
+}
+mlir::Value HIRBuilder::visitTaskScopeExpr(TaskScopeExpr *e) {
+  auto location = loc(e->getLocation());
+
+  // Push a new scope for tracking spawned task handles (RFC-0007).
+  // Any task.spawn inside this block will record its handle here.
+  taskScopeHandleStack.emplace_back();
+
+  // Execute the body — task.spawn calls within will push handles.
+  mlir::Value result = visitCompoundStmt(e->getBody());
+
+  // Pop the handle list and emit pthread_join for each collected handle.
+  auto handles = std::move(taskScopeHandleStack.back());
+  taskScopeHandleStack.pop_back();
+
+  if (!handles.empty()) {
+    auto ptrType = getPtrType();
+    auto i32Type = builder.getIntegerType(32);
+
+    auto pthreadJoinFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_join");
+    if (!pthreadJoinFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType});
+      pthreadJoinFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "pthread_join", fnType);
+    }
+
+    auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+    for (mlir::Value handle : handles) {
+      // Load the pthread_t from the handle alloca, then join.
+      auto tid = builder.create<mlir::LLVM::LoadOp>(location, ptrType, handle);
+      builder.create<mlir::LLVM::CallOp>(location, pthreadJoinFn,
+          mlir::ValueRange{tid, nullArg});
+    }
+  }
+
+  return result;
 }
 mlir::Value HIRBuilder::visitTemplateLiteralExpr(TemplateLiteralExpr *) {
   return {};

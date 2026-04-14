@@ -54,6 +54,7 @@ enum class ExprKind {
   Try,
   Path,
   Paren,
+  TaskScope,
 };
 
 /// Base class for all expressions.
@@ -770,6 +771,24 @@ public:
 
 private:
   Expr *inner;
+};
+
+/// `task.scope { ... }` — scoped thread block.
+/// All task.spawn handles created within the block are automatically joined
+/// before the scope exits, ensuring safe borrowing from the parent scope.
+class TaskScopeExpr : public Expr {
+public:
+  TaskScopeExpr(CompoundStmt *body, SourceLocation loc)
+      : Expr(ExprKind::TaskScope, loc), body(body) {}
+
+  CompoundStmt *getBody() const { return body; }
+
+  static bool classof(const Expr *e) {
+    return e->getKind() == ExprKind::TaskScope;
+  }
+
+private:
+  CompoundStmt *body;
 };
 
 // --- Patterns ---

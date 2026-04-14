@@ -106,6 +106,7 @@ public:
   mlir::Value visitTryExpr(TryExpr *e);
   mlir::Value visitPathExpr(PathExpr *e);
   mlir::Value visitParenExpr(ParenExpr *e);
+  mlir::Value visitTaskScopeExpr(TaskScopeExpr *e);
 
 private:
   /// Convert an AST Type to an MLIR Type.
@@ -192,6 +193,11 @@ private:
 
   /// Get the LLVM tagged union struct type for an enum (for GEP indexing).
   mlir::Type getEnumStructType(llvm::StringRef enumName);
+
+  /// Stack of scoped-thread handle collectors (RFC-0007).
+  /// When non-empty, task_spawn results are pushed onto the top vector
+  /// so that task.scope can auto-join them at block exit.
+  std::vector<llvm::SmallVector<mlir::Value>> taskScopeHandleStack;
 };
 
 } // namespace asc
