@@ -212,12 +212,16 @@ void AliasCheckPass::checkBorrowLifetime(mlir::func::FuncOp func) {
           }
         }
         if (violation) {
+          llvm::StringRef verb = (opName == "own.drop") ? "dropped" : "moved";
           mlir::InFlightDiagnostic diag = op->emitError()
-              << "[E002] owned value dropped/moved while borrow is still active";
+              << "[E002] owned value " << verb
+              << " while borrow is still active";
           diag.attachNote(borrow.borrowOp->getLoc())
               << "borrow created here";
           diag.attachNote(lastBorrowUse->getLoc())
-              << "borrow used here after drop/move";
+              << "borrow used here after " << verb;
+          diag.attachNote(op->getLoc())
+              << "value " << verb << " here";
           signalPassFailure();
         }
       });
@@ -261,6 +265,12 @@ void AliasCheckPass::checkNoMoveWhileBorrowed(mlir::func::FuncOp func) {
                                       << " value while it is borrowed";
           diag.attachNote(borrow.borrowOp->getLoc()) << "borrow created here";
           diag.attachNote(useOp->getLoc()) << "borrowed value used here";
+          // Show origin of the borrowed value if it differs from the borrow op.
+          if (borrow.originValue.getDefiningOp() &&
+              borrow.originValue.getDefiningOp() != borrow.borrowOp) {
+            diag.attachNote(borrow.originValue.getDefiningOp()->getLoc())
+                << "owned value defined here";
+          }
           signalPassFailure();
           return;
         }
@@ -282,7 +292,13 @@ void AliasCheckPass::reportConflict(mlir::Operation *conflicting,
       << "[E001] cannot create " << incomingKind << " borrow; value already has "
       << "an active " << existingKind << " borrow";
   diag.attachNote(existing.borrowOp->getLoc())
-      << "existing " << existingKind << " borrow created here";
+      << existingKind << " borrow created here";
+  // Show where the existing borrow is still in use (if we can find a use).
+  for (mlir::OpOperand &use : existing.borrowOp->getResult(0).getUses()) {
+    diag.attachNote(use.getOwner()->getLoc())
+        << "existing borrow still in use here";
+    break; // Just show first use for brevity.
+  }
   signalPassFailure();
 }
 

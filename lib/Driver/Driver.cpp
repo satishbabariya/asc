@@ -14,6 +14,7 @@
 #include "asc/Analysis/EscapeAnalysis.h"
 #include "asc/Analysis/DropInsertion.h"
 #include "asc/Analysis/PanicScopeWrap.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/StringSet.h"
@@ -724,6 +725,33 @@ ExitCode Driver::runSema() {
 
 ExitCode Driver::lowerToHIR() {
   mlirState = std::make_unique<MLIRState>();
+
+  // Register a diagnostic handler that prints notes (MLIR's default handler
+  // only prints the primary diagnostic and discards attached notes).
+  mlirState->context.getDiagEngine().registerHandler(
+      [](mlir::Diagnostic &diag) {
+        llvm::raw_ostream &os = llvm::errs();
+        os << diag.getLocation() << ": ";
+        switch (diag.getSeverity()) {
+        case mlir::DiagnosticSeverity::Error:
+          os << "error: ";
+          break;
+        case mlir::DiagnosticSeverity::Warning:
+          os << "warning: ";
+          break;
+        case mlir::DiagnosticSeverity::Note:
+          os << "note: ";
+          break;
+        case mlir::DiagnosticSeverity::Remark:
+          os << "remark: ";
+          break;
+        }
+        os << diag.str() << "\n";
+        for (auto &note : diag.getNotes()) {
+          os << note.getLocation() << ": note: " << note.str() << "\n";
+        }
+        return mlir::success();
+      });
 
   HIRBuilder hirBuilder(mlirState->context, *astCtx, *semaInstance,
                         sourceManager);
