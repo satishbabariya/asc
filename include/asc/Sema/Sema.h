@@ -180,6 +180,13 @@ private:
   llvm::DenseMap<VarDecl *, OwnershipInfo> varOwnership;
 
 public:
+  /// Look up impl blocks for a type by name (used by HIR Builder).
+  const llvm::SmallVector<ImplDecl *, 2> *getImplsForType(
+      llvm::StringRef name) const {
+    auto it = implDecls.find(name);
+    return it != implDecls.end() ? &it->second : nullptr;
+  }
+
   /// Get ownership info for an expression (used by HIR Builder).
   OwnershipInfo getExprOwnership(Expr *e) const {
     auto it = exprOwnership.find(e);
