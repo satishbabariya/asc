@@ -67,8 +67,18 @@ void __asc_chan_recv(void *chan, void *out, uint32_t elem_size) {
   __atomic_fetch_add(&ch->head, 1, __ATOMIC_RELEASE);
 }
 
-void __asc_chan_free(void *chan) {
-  free(chan);
+void __asc_chan_clone(void *channel) {
+  AscChannel *ch = (AscChannel *)channel;
+  __atomic_fetch_add(&ch->ref_count, 1, __ATOMIC_ACQ_REL);
+}
+
+void __asc_chan_drop(void *channel) {
+  AscChannel *ch = (AscChannel *)channel;
+  uint32_t prev = __atomic_fetch_sub(&ch->ref_count, 1, __ATOMIC_ACQ_REL);
+  if (prev == 1) {
+    // Last reference — free the channel and its slot buffer.
+    free(ch);
+  }
 }
 
 /* ── MPMC Channel (mutex-guarded) ────────────────────────────── */

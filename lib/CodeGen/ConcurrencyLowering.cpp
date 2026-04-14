@@ -50,6 +50,20 @@ void ConcurrencyLoweringPass::declareRuntimeFunctions(mlir::ModuleOp module) {
     auto ty = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
     builder.create<mlir::LLVM::LLVMFuncOp>(loc, "free", ty);
   }
+
+  // SPSC channel ref-counted drop/clone (available on all targets).
+  {
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(module.getContext());
+    if (!module.lookupSymbol("__asc_chan_drop")) {
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_chan_drop", fnType);
+    }
+    if (!module.lookupSymbol("__asc_chan_clone")) {
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_chan_clone", fnType);
+    }
+  }
+
   if (!isWasmTarget()) {
     if (!module.lookupSymbol("pthread_create")) {
       auto ty = mlir::LLVM::LLVMFunctionType::get(i32Type,
