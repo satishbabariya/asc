@@ -233,11 +233,25 @@ struct OwnershipLoweringPass
             auto flagPtr = op->getOperand(1);
             auto i1Ty = mlir::IntegerType::get(ctx, 1);
             // Load the drop flag to check if value is still alive (not moved).
-            // The flag value is emitted for the optimizer to use; full
-            // conditional branching will be added in a future enhancement.
             auto flagLoad =
                 builder.create<mlir::LLVM::LoadOp>(loc, i1Ty, flagPtr);
-            (void)flagLoad;
+
+            // Split block: check → drop (conditional) → merge (continue).
+            mlir::Block *checkBlock = op->getBlock();
+            mlir::Block *mergeBlock = checkBlock->splitBlock(op);
+            auto *parentRegion = checkBlock->getParent();
+            mlir::Block *dropBlock = new mlir::Block();
+            parentRegion->getBlocks().insertAfter(
+                mlir::Region::iterator(checkBlock), dropBlock);
+
+            // check-block: branch to drop-block if flag is true (still alive),
+            // otherwise skip to merge-block.
+            builder.setInsertionPointToEnd(checkBlock);
+            builder.create<mlir::LLVM::CondBrOp>(loc, flagLoad, dropBlock,
+                                                  mergeBlock);
+
+            // drop-block: emit destructor call and free, then branch to merge.
+            builder.setInsertionPointToStart(dropBlock);
 
             // Check for custom Drop destructor.
             if (auto typeNameAttr =
@@ -263,12 +277,9 @@ struct OwnershipLoweringPass
               builder.create<mlir::LLVM::CallOp>(loc, freeFn,
                                                   mlir::ValueRange{val});
             }
-            // Note: The flag check (drop_flag_check/load) provides the
-            // conditional. Full conditional branching requires SCF or CF
-            // dialect ops which are complex to emit here. For MVP, the flag
-            // alloca+store+load pattern is emitted; the optimizer will see
-            // the flag and can use it. The flag value is available for
-            // future enhancement with proper conditional branching.
+
+            builder.create<mlir::LLVM::BrOp>(loc, mlir::ValueRange{},
+                                              mergeBlock);
           } else {
             // Unconditional drop (normal case).
 

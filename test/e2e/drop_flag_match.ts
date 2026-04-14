@@ -1,5 +1,6 @@
-// RUN: %asc build %s --emit mlir > %t.out 2>&1; grep -q "own.drop_flag_alloc" %t.out
-// Test: match arm conditional move with drop flag.
+// RUN: %asc build %s --emit llvmir > %t.out 2>&1
+// RUN: grep -q "br i1" %t.out
+// Test: match arm conditional move with conditional branch around drop.
 
 struct Handle { id: i32 }
 function take(h: own<Handle>): void { }
