@@ -42,6 +42,58 @@ void *memset(void *dst, int c, unsigned long n) {
 
 #endif // __wasm__
 
+/* ── Thread-Local Arena Allocator ────────────────────────────── */
+
+#ifndef __wasm__
+extern void *malloc(unsigned long size);
+extern void free(void *ptr);
+#endif
+
+#define ASC_DEFAULT_ARENA_SIZE (1024 * 1024) /* 1 MB */
+
+#ifdef __wasm__
+static unsigned char __asc_arena_buf[ASC_DEFAULT_ARENA_SIZE];
+static unsigned char *__asc_arena_ptr = __asc_arena_buf;
+static unsigned char *__asc_arena_end = __asc_arena_buf + ASC_DEFAULT_ARENA_SIZE;
+#else
+_Thread_local static unsigned char *__asc_arena_buf = 0;
+_Thread_local static unsigned char *__asc_arena_ptr = 0;
+_Thread_local static unsigned char *__asc_arena_end = 0;
+#endif
+
+void __asc_arena_init(unsigned long size) {
+#ifndef __wasm__
+  if (__asc_arena_buf) free(__asc_arena_buf);
+  __asc_arena_buf = (unsigned char *)malloc(size);
+  __asc_arena_ptr = __asc_arena_buf;
+  __asc_arena_end = __asc_arena_buf + size;
+#endif
+}
+
+void *__asc_arena_alloc(unsigned long size, unsigned long align) {
+  unsigned long addr = (unsigned long)__asc_arena_ptr;
+  unsigned long aligned = (addr + align - 1) & ~(align - 1);
+  unsigned char *result = (unsigned char *)aligned;
+  if (result + size > __asc_arena_end) return 0;
+  __asc_arena_ptr = result + size;
+  return result;
+}
+
+void __asc_arena_reset(void) {
+  __asc_arena_ptr = __asc_arena_buf;
+}
+
+void __asc_arena_destroy(void) {
+#ifndef __wasm__
+  if (__asc_arena_buf) {
+    free(__asc_arena_buf);
+    __asc_arena_buf = 0;
+    __asc_arena_ptr = 0;
+    __asc_arena_end = 0;
+  }
+#endif
+}
+
 // Thread-local unwind flag and panic handler for drop-on-panic.
 #ifdef __wasm__
 static int __asc_in_unwind = 0;

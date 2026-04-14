@@ -66,6 +66,32 @@ struct OwnershipLoweringPass
     auto ptrType = mlir::LLVM::LLVMPointerType::get(ctx);
     auto i64Type = mlir::IntegerType::get(ctx, 64);
 
+    // Arena allocator declarations.
+    {
+      auto loc = module.getLoc();
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      if (!module.lookupSymbol("__asc_arena_alloc")) {
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type, i64Type});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_alloc", fnType);
+      }
+      if (!module.lookupSymbol("__asc_arena_init")) {
+        auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {i64Type});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_init", fnType);
+      }
+      if (!module.lookupSymbol("__asc_arena_reset")) {
+        auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_reset", fnType);
+      }
+      if (!module.lookupSymbol("__asc_arena_destroy")) {
+        auto voidType = mlir::LLVM::LLVMVoidType::get(ctx);
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(voidType, {});
+        builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_arena_destroy", fnType);
+      }
+    }
+
     for (auto *op : opsToLower) {
       builder.setInsertionPoint(op);
       llvm::StringRef name = op->getName().getStringRef();
