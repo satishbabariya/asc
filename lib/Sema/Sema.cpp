@@ -205,6 +205,26 @@ void Sema::checkCompoundStmt(CompoundStmt *s) {
                       "' is never used — this is a resource leak");
   });
 
+  // W005: Check for unused variables (including copy types).
+  // Skip variables whose names start with underscore (conventional ignore).
+  currentScope->forEachSymbol([&](llvm::StringRef name, Symbol &sym) {
+    if (!sym.decl || sym.isUsed || sym.isMoved)
+      return;
+    if (name.starts_with("_"))
+      return;
+    if (dynamic_cast<FunctionDecl *>(sym.decl))
+      return;
+    // Only warn for variable declarations (let/const).
+    if (!dynamic_cast<VarDecl *>(sym.decl))
+      return;
+    // Skip if already warned via W004 (owned non-copy).
+    if (sym.type && !isCopyType(sym.type) && !sym.ownership.isCopy)
+      return;
+    diags.emitWarning(sym.decl->getLocation(), DiagID::WarnUnusedVariable,
+                      "unused variable '" + name.str() +
+                      "' — consider prefixing with '_' to silence");
+  });
+
   popScope();
 }
 

@@ -34,6 +34,7 @@ enum class DiagID : unsigned {
   WarnLargeCopyType = 102,            // W002
   WarnNonExhaustiveMatch = 103,       // W003
   WarnResourceLeak = 104,            // W004
+  WarnUnusedVariable = 105,           // W005
 
   // General compiler diagnostics
   ErrUnexpectedToken = 200,
@@ -93,6 +94,7 @@ inline const char *getDiagCode(DiagID id) {
   case DiagID::WarnLargeCopyType: return "W002";
   case DiagID::WarnNonExhaustiveMatch: return "W003";
   case DiagID::WarnResourceLeak: return "W004";
+  case DiagID::WarnUnusedVariable: return "W005";
   case DiagID::ErrResourceLeak: return "E011";
   case DiagID::ErrDoubleConsume: return "E012";
   default: return nullptr;
