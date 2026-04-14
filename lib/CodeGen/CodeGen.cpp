@@ -134,6 +134,9 @@ bool CodeGenerator::translateToLLVMIR(mlir::ModuleOp module) {
 
   // Add DWARF debug info if requested.
   if (opts.debugInfo) {
+    llvmModule->addModuleFlag(llvm::Module::Warning, "Debug Info Version",
+                              llvm::DEBUG_METADATA_VERSION);
+    llvmModule->addModuleFlag(llvm::Module::Warning, "Dwarf Version", 4);
     addDebugInfo();
   }
 
