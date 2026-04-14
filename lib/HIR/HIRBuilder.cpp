@@ -4911,8 +4911,104 @@ mlir::Value HIRBuilder::visitTaskScopeExpr(TaskScopeExpr *e) {
 
   return result;
 }
-mlir::Value HIRBuilder::visitTemplateLiteralExpr(TemplateLiteralExpr *) {
-  return {};
+mlir::Value HIRBuilder::visitTemplateLiteralExpr(TemplateLiteralExpr *e) {
+  auto location = loc(e->getLocation());
+  auto ptrType = getPtrType();
+  auto i64Type = builder.getIntegerType(64);
+
+  // Concatenate all string parts, skipping expression interpolations for now.
+  // Each text part is emitted as a global string constant and passed to
+  // __asc_string_from. Parts are joined via __asc_string_concat.
+  mlir::Value result;
+
+  // Ensure __asc_string_from is declared.
+  auto stringFromFn =
+      module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_from");
+  if (!stringFromFn) {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType,
+                                                     {ptrType, i64Type});
+    stringFromFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+        location, "__asc_string_from", fnType);
+  }
+
+  // Ensure __asc_string_concat is declared.
+  auto stringConcatFn =
+      module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_string_concat");
+  if (!stringConcatFn) {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType,
+                                                     {ptrType, ptrType});
+    stringConcatFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+        location, "__asc_string_concat", fnType);
+  }
+
+  static unsigned tmplStrCounter = 0;
+  for (const auto &part : e->getParts()) {
+    // Emit string text part as a global constant.
+    if (!part.text.empty()) {
+      std::string globalName =
+          "__tmpl_str_" + std::to_string(tmplStrCounter++);
+      {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        builder.create<mlir::LLVM::GlobalOp>(
+            location,
+            mlir::LLVM::LLVMArrayType::get(builder.getIntegerType(8),
+                                            part.text.size()),
+            /*isConstant=*/true, mlir::LLVM::Linkage::External, globalName,
+            builder.getStringAttr(part.text));
+      }
+
+      auto addrOp = builder.create<mlir::LLVM::AddressOfOp>(
+          location, ptrType, globalName);
+      auto lenConst = builder.create<mlir::LLVM::ConstantOp>(
+          location, i64Type, static_cast<int64_t>(part.text.size()));
+      auto strVal = builder.create<mlir::LLVM::CallOp>(
+          location, stringFromFn, mlir::ValueRange{addrOp, lenConst})
+          .getResult();
+
+      if (!result) {
+        result = strVal;
+      } else {
+        result = builder.create<mlir::LLVM::CallOp>(
+            location, stringConcatFn, mlir::ValueRange{result, strVal})
+            .getResult();
+      }
+    }
+
+    // Visit interpolated expressions (skip for now — just evaluate them
+    // for side effects but don't concatenate into the string).
+    if (part.expr) {
+      (void)visitExpr(part.expr);
+    }
+  }
+
+  // If the template was completely empty, return an empty string.
+  if (!result) {
+    std::string globalName =
+        "__tmpl_str_" + std::to_string(tmplStrCounter++);
+    {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      builder.create<mlir::LLVM::GlobalOp>(
+          location,
+          mlir::LLVM::LLVMArrayType::get(builder.getIntegerType(8), 0),
+          /*isConstant=*/true, mlir::LLVM::Linkage::External, globalName,
+          builder.getStringAttr(""));
+    }
+    auto addrOp = builder.create<mlir::LLVM::AddressOfOp>(
+        location, ptrType, globalName);
+    auto lenConst = builder.create<mlir::LLVM::ConstantOp>(
+        location, i64Type, static_cast<int64_t>(0));
+    result = builder.create<mlir::LLVM::CallOp>(
+        location, stringFromFn, mlir::ValueRange{addrOp, lenConst})
+        .getResult();
+  }
+
+  return result;
 }
 mlir::Value HIRBuilder::visitTryExpr(TryExpr *e) {
   return visitExpr(e->getOperand());
