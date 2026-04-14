@@ -4626,8 +4626,8 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         location, chanMakeFn, mlir::ValueRange{capConst, sizeConst}).getResult();
   }
 
-  // Task spawn: task_spawn(closure) → call pthread_create or wasi_thread_start.
-  // For now, just call the closure directly (single-threaded emulation).
+  // Task spawn: task_spawn(fn[, arg1, arg2, ...]) → call pthread_create.
+  // Supports 0, 1, or N captured arguments via closure env struct (RFC-0007).
   if (name == "task_spawn") {
     if (!e->getArgs().empty()) {
       // Get closure function name directly from AST to avoid emitting
@@ -4663,9 +4663,10 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
           auto closureCallee = module.lookupSymbol<mlir::func::FuncOp>(closureFnName);
           if (closureCallee) {
             auto cft = closureCallee.getFunctionType();
-            if (cft.getNumInputs() == 0) {
+            unsigned numInputs = cft.getNumInputs();
+            if (numInputs == 0) {
               builder.create<mlir::func::CallOp>(location, closureCallee, mlir::ValueRange{});
-            } else if (cft.getNumInputs() == 1) {
+            } else if (numInputs == 1) {
               // Pass the void *arg through to the function.
               mlir::Value arg = entryBlock->getArgument(0);
               // If the function expects a non-pointer type, load from the pointer.
@@ -4674,6 +4675,34 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
                 arg = builder.create<mlir::LLVM::LoadOp>(location, expectedType, arg);
               }
               builder.create<mlir::func::CallOp>(location, closureCallee, mlir::ValueRange{arg});
+            } else {
+              // Multi-arg: unpack closure env struct via GEP.
+              // The void *arg points to a malloc'd struct containing all captured values.
+              // Build the struct type matching what the caller packed.
+              llvm::SmallVector<mlir::Type> fieldTypes;
+              for (unsigned i = 0; i < numInputs; ++i)
+                fieldTypes.push_back(cft.getInput(i));
+              auto envStructTy = mlir::LLVM::LLVMStructType::getLiteral(
+                  builder.getContext(), fieldTypes, /*isPacked=*/true);
+
+              mlir::Value envPtr = entryBlock->getArgument(0);
+              llvm::SmallVector<mlir::Value> callArgs;
+              for (unsigned i = 0; i < numInputs; ++i) {
+                auto idx = builder.create<mlir::LLVM::ConstantOp>(
+                    location, builder.getIntegerType(32),
+                    static_cast<int64_t>(i));
+                auto zero = builder.create<mlir::LLVM::ConstantOp>(
+                    location, builder.getIntegerType(32),
+                    static_cast<int64_t>(0));
+                auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+                    location, ptrType, envStructTy, envPtr,
+                    mlir::ValueRange{zero, idx});
+                auto val = builder.create<mlir::LLVM::LoadOp>(
+                    location, fieldTypes[i], fieldPtr);
+                callArgs.push_back(val);
+              }
+              builder.create<mlir::func::CallOp>(location, closureCallee,
+                                                  mlir::ValueRange(callArgs));
             }
           }
         }
@@ -4701,12 +4730,13 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         auto wrapperAddr = builder.create<mlir::LLVM::AddressOfOp>(
             location, ptrType, wrapperName);
 
-        // If a second argument is provided to task_spawn, pass it as void *arg.
+        // Build closure env struct for captured arguments passed to the spawned task.
         mlir::Value threadArg;
-        if (e->getArgs().size() >= 2) {
+        size_t numCaptured = e->getArgs().size() - 1; // args after the function name
+        if (numCaptured == 1) {
+          // Single argument: malloc + store (original fast path).
           mlir::Value argVal = visitExpr(e->getArgs()[1]);
           if (argVal) {
-            // If the value is not a pointer, store it to a heap allocation.
             if (!mlir::isa<mlir::LLVM::LLVMPointerType>(argVal.getType())) {
               auto mallocFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
               if (!mallocFn) {
@@ -4724,6 +4754,54 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
               builder.create<mlir::LLVM::StoreOp>(location, argVal, threadArg);
             } else {
               threadArg = argVal;
+            }
+          }
+        } else if (numCaptured > 1) {
+          // Multi-capture: pack all arguments into a closure env struct.
+          // 1. Evaluate all captured arguments.
+          llvm::SmallVector<mlir::Value> capturedVals;
+          llvm::SmallVector<mlir::Type> fieldTypes;
+          for (size_t i = 1; i < e->getArgs().size(); ++i) {
+            mlir::Value v = visitExpr(e->getArgs()[i]);
+            if (v) {
+              capturedVals.push_back(v);
+              fieldTypes.push_back(v.getType());
+            }
+          }
+
+          if (!capturedVals.empty()) {
+            // 2. Build a packed LLVM struct type for the env.
+            auto envStructTy = mlir::LLVM::LLVMStructType::getLiteral(
+                builder.getContext(), fieldTypes, /*isPacked=*/true);
+
+            // 3. Compute total struct size and malloc.
+            uint64_t totalSize = 0;
+            for (auto ty : fieldTypes)
+              totalSize += getTypeSize(ty);
+            if (totalSize == 0) totalSize = 8;
+
+            auto mallocFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
+            if (!mallocFn) {
+              mlir::OpBuilder::InsertionGuard guard(builder);
+              builder.setInsertionPointToStart(module.getBody());
+              auto fnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
+              mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "malloc", fnType);
+            }
+            auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+                location, i64Type, static_cast<int64_t>(totalSize));
+            threadArg = builder.create<mlir::LLVM::CallOp>(
+                location, mallocFn, mlir::ValueRange{sizeConst}).getResult();
+
+            // 4. GEP + store each captured value into the struct.
+            for (unsigned i = 0; i < capturedVals.size(); ++i) {
+              auto idx = builder.create<mlir::LLVM::ConstantOp>(
+                  location, i32Type, static_cast<int64_t>(i));
+              auto zero = builder.create<mlir::LLVM::ConstantOp>(
+                  location, i32Type, static_cast<int64_t>(0));
+              auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+                  location, ptrType, envStructTy, threadArg,
+                  mlir::ValueRange{zero, idx});
+              builder.create<mlir::LLVM::StoreOp>(location, capturedVals[i], fieldPtr);
             }
           }
         }
