@@ -126,6 +126,12 @@ bool CodeGenerator::translateToLLVMIR(mlir::ModuleOp module) {
   }
   llvmModule->setTargetTriple(opts.targetTriple);
 
+  // Warn about experimental GPU targets.
+  llvm::Triple triple(opts.targetTriple);
+  if (triple.isNVPTX() || triple.isAMDGCN()) {
+    llvm::errs() << "warning: GPU target support is experimental\n";
+  }
+
   // Add DWARF debug info if requested.
   if (opts.debugInfo) {
     addDebugInfo();
