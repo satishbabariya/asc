@@ -287,6 +287,44 @@ void RegionInferencePass::propagateThroughPhis(mlir::func::FuncOp func) {
   }
 }
 
+void RegionInferencePass::collectOutlivesConstraints(mlir::func::FuncOp func) {
+  // A borrow returned from a function must outlive the function scope.
+  // If the borrowed VALUE is defined inside the function, this is a violation.
+  func.walk([&](mlir::Operation *op) {
+    if (op->getName().getStringRef() != "func.return")
+      return;
+    for (mlir::Value operand : op->getOperands()) {
+      auto it = result.valueToRegion.find(operand);
+      if (it == result.valueToRegion.end())
+        continue;
+      RegionID borrowRegion = it->second;
+      auto &region = result.regions[borrowRegion];
+      if (!region.borrowedValue)
+        continue;
+      // If the origin is defined inside this function, the borrow escapes.
+      if (auto *defOp = region.borrowedValue.getDefiningOp()) {
+        if (defOp->getParentOfType<mlir::func::FuncOp>() == func) {
+          result.outlives.push_back(
+              OutlivesConstraint{borrowRegion, region.borrowedValue,
+                                 op->getLoc()});
+        }
+      }
+    }
+  });
+}
+
+void RegionInferencePass::validateOutlives(mlir::func::FuncOp func) {
+  for (const auto &constraint : result.outlives) {
+    if (auto *defOp = constraint.origin.getDefiningOp()) {
+      auto diag = defOp->emitError()
+          << "[E007] borrow does not live long enough — "
+          << "value is dropped when scope exits";
+      diag.attachNote(constraint.loc) << "borrow escapes here";
+      signalPassFailure();
+    }
+  }
+}
+
 void RegionInferencePass::runOnOperation() {
   mlir::func::FuncOp func = getOperation();
   if (func.isDeclaration())
@@ -295,6 +333,7 @@ void RegionInferencePass::runOnOperation() {
   // Clear previous results.
   result.valueToRegion.clear();
   result.regions.clear();
+  result.outlives.clear();
   blockIndex.clear();
 
   // Step 1: Build CFG index.
@@ -308,6 +347,10 @@ void RegionInferencePass::runOnOperation() {
 
   // Step 4: Propagate through phi nodes (block arguments).
   propagateThroughPhis(func);
+
+  // Step 5: Collect and validate outlives constraints.
+  collectOutlivesConstraints(func);
+  validateOutlives(func);
 }
 
 std::unique_ptr<mlir::Pass> createRegionInferencePass() {

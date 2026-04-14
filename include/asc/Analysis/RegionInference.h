@@ -42,6 +42,13 @@ struct BorrowRegion {
   bool isMutable = false;
 };
 
+/// An outlives constraint: borrow region must not outlive the scope of its origin.
+struct OutlivesConstraint {
+  RegionID borrowRegion;  // The borrow that must end first
+  mlir::Value origin;     // The value being borrowed
+  mlir::Location loc;     // Source location for diagnostics
+};
+
 /// Union-Find (disjoint set) data structure for region merging.
 class RegionUnionFind {
 public:
@@ -90,10 +97,16 @@ public:
     return std::nullopt;
   }
 
+  /// Get all outlives constraints collected during inference.
+  const llvm::SmallVector<OutlivesConstraint, 8> &getOutlives() const {
+    return outlives;
+  }
+
 private:
   friend class RegionInferencePass;
   llvm::DenseMap<mlir::Value, RegionID> valueToRegion;
   llvm::SmallVector<BorrowRegion, 16> regions;
+  llvm::SmallVector<OutlivesConstraint, 8> outlives;
   RegionUnionFind unionFind;
 };
 
@@ -134,6 +147,12 @@ private:
 
   /// Propagate region constraints through block arguments (phi nodes).
   void propagateThroughPhis(mlir::func::FuncOp func);
+
+  /// Collect outlives constraints (borrows that escape their origin's scope).
+  void collectOutlivesConstraints(mlir::func::FuncOp func);
+
+  /// Validate outlives constraints and emit E007 diagnostics.
+  void validateOutlives(mlir::func::FuncOp func);
 
   /// Build the CFG point index for blocks.
   void buildCFGIndex(mlir::func::FuncOp func);

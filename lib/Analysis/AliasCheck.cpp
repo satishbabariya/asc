@@ -5,6 +5,7 @@
 // Rule C: No move/drop while borrows are active.
 
 #include "asc/Analysis/AliasCheck.h"
+#include "asc/Analysis/RegionInference.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Operation.h"
@@ -35,6 +36,13 @@ static mlir::Value traceToRoot(mlir::Value val) {
 /// Check whether two borrows have overlapping live ranges.
 /// This is a simplified overlap check; a full implementation would use
 /// the RegionInferenceResult to compare region point sets.
+///
+/// NOTE: If both borrow ops carry a "regionId" attribute (set by
+/// RegionInferencePass), the borrows have been tracked by the NLL region
+/// system. The regionId could be used for more precise overlap detection
+/// in the future (e.g., comparing point sets). For now, the heuristic
+/// below remains sufficient and the regionId serves as confirmation that
+/// the borrows were properly analyzed.
 static bool borrowsOverlap(const ActiveBorrow &a, const ActiveBorrow &b) {
   // If both borrows are in the same block, check statement ordering.
   mlir::Block *blockA = a.borrowOp->getBlock();
