@@ -82,9 +82,54 @@ struct OwnershipLoweringPass
           if (escapeAttr.getValue() == "must_heap")
             useHeap = true;
         }
+
+        // Check if the operand is a pointer (e.g., from struct literal alloca).
+        // In that case the struct data is already stored in the operand alloca,
+        // so we must reuse it (stack) or memcpy from it (heap).
+        bool hasPointerInit = op->getNumOperands() > 0 &&
+            mlir::isa<mlir::LLVM::LLVMPointerType>(op->getOperand(0).getType());
+
+        // Compute struct size from the alloca's element type if available.
+        uint64_t structSize = 0;
+        mlir::LLVM::AllocaOp initAlloca;
+        if (hasPointerInit) {
+          if (auto *defOp = op->getOperand(0).getDefiningOp()) {
+            initAlloca = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp);
+            if (initAlloca) {
+              if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(
+                      initAlloca.getElemType())) {
+                for (mlir::Type fieldTy : structTy.getBody()) {
+                  if (fieldTy.isIntOrIndexOrFloat())
+                    structSize += (fieldTy.getIntOrFloatBitWidth() + 7) / 8;
+                  else
+                    structSize += 8; // Pointer-sized default.
+                }
+                if (structSize == 0) structSize = 8;
+              }
+            }
+          }
+        }
+
         mlir::Value result;
 
-        if (useHeap) {
+        if (hasPointerInit && initAlloca) {
+          // Operand is a struct alloca with data already stored in it.
+          if (useHeap) {
+            // Heap: malloc + memcpy from the original alloca.
+            auto mallocFn = getOrInsertMalloc(module, builder);
+            uint64_t allocSize = structSize > 0 ? structSize : size;
+            auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)allocSize);
+            auto callOp = builder.create<mlir::LLVM::CallOp>(loc, mallocFn, mlir::ValueRange{sizeVal});
+            result = callOp.getResult();
+            // Copy struct data from stack alloca to heap allocation.
+            auto falseCst = builder.create<mlir::LLVM::ConstantOp>(
+                loc, mlir::IntegerType::get(ctx, 1), (int64_t)0);
+            builder.create<mlir::LLVM::MemcpyOp>(loc, result, op->getOperand(0), sizeVal, falseCst);
+          } else {
+            // Stack-safe: forward the original alloca pointer directly.
+            result = op->getOperand(0);
+          }
+        } else if (useHeap) {
           // @heap: allocate on heap via malloc.
           auto mallocFn = getOrInsertMalloc(module, builder);
           auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(loc, i64Type, (int64_t)size);

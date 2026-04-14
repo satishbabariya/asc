@@ -1985,6 +1985,20 @@ mlir::Value HIRBuilder::visitStructLiteral(StructLiteral *e) {
       }
     }
 
+    // Wrap in own.alloc so escape analysis can classify this allocation.
+    // Skip @copy types — they use value semantics and don't need
+    // ownership tracking or escape analysis.
+    bool isCopy = false;
+    if (sit != sema.structDecls.end()) {
+      for (const auto &attr : sit->second->getAttributes()) {
+        if (attr == "@copy") { isCopy = true; break; }
+      }
+    }
+    if (!isCopy) {
+      auto ownType = own::OwnValType::get(&mlirCtx, structType);
+      auto allocOp = builder.create<own::OwnAllocOp>(location, ownType, alloca);
+      return allocOp.getResult();
+    }
     return alloca;
   }
 
