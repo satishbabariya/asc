@@ -309,7 +309,7 @@ void CodeGenerator::addDebugInfo() {
   // Try to get the actual source file from the module metadata or opts.
   if (srcFile.empty()) srcFile = "<stdin>";
   auto *file = dib.createFile(srcFile, srcDir);
-  auto *cu = dib.createCompileUnit(
+  (void)dib.createCompileUnit(
       llvm::dwarf::DW_LANG_C, file, "asc 0.1.0",
       opts.optLevel != OptLevel::O0, /*Flags=*/"", /*RV=*/0);
 
