@@ -65,3 +65,46 @@ function random_u32_range(upper: u32): Result<u32, RandomError> {
     }
   }
 }
+
+/// Generate a UUID v4 (random) as 16 bytes.
+/// Sets version (4) and variant (RFC 4122) bits.
+function uuid_v4(): Result<[u8; 16], RandomError> {
+  let buf: [u8; 16] = [0u8; 16];
+  random_bytes(refmut buf)?;
+  // Set version to 4: byte 6 = 0100xxxx.
+  buf[6] = (buf[6] & 0x0F) | 0x40;
+  // Set variant to RFC 4122: byte 8 = 10xxxxxx.
+  buf[8] = (buf[8] & 0x3F) | 0x80;
+  return Result::Ok(buf);
+}
+
+const UUID_HEX: [u8; 16] = [
+  0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+  0x38, 0x39, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66,
+];
+
+/// Format a byte as two lowercase hex characters and push to string.
+function push_hex_byte(b: u8, s: refmut<String>): void {
+  s.push(UUID_HEX[(b >> 4) as usize] as char);
+  s.push(UUID_HEX[(b & 0x0F) as usize] as char);
+}
+
+/// Generate a UUID v4 string: "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".
+function uuid_v4_string(): Result<own<String>, RandomError> {
+  let bytes = uuid_v4()?;
+  let result = String::with_capacity(36);
+
+  // 8-4-4-4-12 hex chars with dashes.
+  let i: usize = 0;
+  while i < 4 { push_hex_byte(bytes[i], &mut result); i = i + 1; }
+  result.push('-');
+  while i < 6 { push_hex_byte(bytes[i], &mut result); i = i + 1; }
+  result.push('-');
+  while i < 8 { push_hex_byte(bytes[i], &mut result); i = i + 1; }
+  result.push('-');
+  while i < 10 { push_hex_byte(bytes[i], &mut result); i = i + 1; }
+  result.push('-');
+  while i < 16 { push_hex_byte(bytes[i], &mut result); i = i + 1; }
+
+  return Result::Ok(result);
+}
