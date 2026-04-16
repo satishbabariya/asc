@@ -341,3 +341,16 @@ impl<T> Iterator for VecIterMut<T> {
     return Option::Some(unsafe { &mut *current });
   }
 }
+
+impl<T> FromIterator<T> for Vec<T> {
+  fn from_iter<I: Iterator>(iter: own<I>): own<Vec<T>> {
+    let v: Vec<T> = Vec::new();
+    loop {
+      match iter.next() {
+        Option::Some(item) => { v.push(item); },
+        Option::None => { break; },
+      }
+    }
+    return v;
+  }
+}
