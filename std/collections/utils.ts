@@ -245,3 +245,83 @@ function interleave<T>(a: own<Vec<T>>, b: own<Vec<T>>): own<Vec<T>> {
   free(b.ptr);
   return result;
 }
+
+/// Binary search for partition point — first index where predicate is true. O(log n).
+function partition_point<T>(items: ref<Vec<T>>, pred: (ref<T>) -> bool): i32 {
+  let lo: i32 = 0;
+  let hi: i32 = items.len() as i32;
+  while lo < hi {
+    const mid = lo + (hi - lo) / 2;
+    if pred(items.get(mid as usize).unwrap()) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
+/// Elements in either a or b, deduped, preserving order. O(n*m).
+function union<T: PartialEq>(a: ref<Vec<T>>, b: ref<Vec<T>>): own<Vec<ref<T>>> {
+  let result: Vec<ref<T>> = Vec::new();
+  let i: i32 = 0;
+  while (i as usize) < a.len() {
+    result.push(a.get(i as usize).unwrap());
+    i = i + 1;
+  }
+  i = 0;
+  while (i as usize) < b.len() {
+    const elem = b.get(i as usize).unwrap();
+    let found = false;
+    let j: i32 = 0;
+    while (j as usize) < a.len() {
+      if a.get(j as usize).unwrap().eq(elem) { found = true; break; }
+      j = j + 1;
+    }
+    if !found { result.push(elem); }
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Zip with a combining function. Returns Vec<C>.
+function zip_with<A, B, C>(
+  a: ref<Vec<A>>, b: ref<Vec<B>>,
+  f: (ref<A>, ref<B>) -> own<C>
+): own<Vec<C>> {
+  let result: Vec<C> = Vec::new();
+  let len = if a.len() < b.len() { a.len() } else { b.len() };
+  let i: i32 = 0;
+  while (i as usize) < len {
+    result.push(f(a.get(i as usize).unwrap(), b.get(i as usize).unwrap()));
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Unzip a Vec of pairs into two Vecs.
+function unzip<A, B>(pairs: own<Vec<(A, B)>>): (own<Vec<A>>, own<Vec<B>>) {
+  let as_vec: Vec<A> = Vec::new();
+  let bs_vec: Vec<B> = Vec::new();
+  let i: i32 = 0;
+  while (i as usize) < pairs.len() {
+    const pair = pairs.get(i as usize).unwrap();
+    as_vec.push(pair.0);
+    bs_vec.push(pair.1);
+    i = i + 1;
+  }
+  return (as_vec, bs_vec);
+}
+
+/// Cumulative sums. [1,2,3] -> [1,3,6].
+function scan_sum(items: ref<Vec<i32>>): own<Vec<i32>> {
+  let result: Vec<i32> = Vec::new();
+  let acc: i32 = 0;
+  let i: i32 = 0;
+  while (i as usize) < items.len() {
+    acc = acc + *items.get(i as usize).unwrap();
+    result.push(acc);
+    i = i + 1;
+  }
+  return result;
+}
