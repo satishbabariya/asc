@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~82% RFC coverage. 249 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~84% RFC coverage. 250 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -24,7 +24,7 @@ lib/
 │                  sync_rt.c, arc_rt.c, rc_rt.c, atomics.c, wasi_*.c (1227 LOC)
 ├── Driver/        Driver.cpp (700+ LOC) — CLI, pipeline orchestration, LSP, Wasm linking
 include/asc/       Headers for all modules
-test/              249 lit tests (e2e, integration, std, Lex, Parse, Sema)
+test/              250 lit tests (e2e, integration, std, Lex, Parse, Sema)
 rfcs/              20 accepted RFCs — source of truth for design
 docs/superpowers/  Design specs and implementation plans
 tools/asc/         main.cpp entry point
@@ -75,7 +75,10 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - Match exhaustiveness warning (W003)
 - Conditional move → warning (not error), per RFC
 - Drop destructor dispatch: `__drop_TypeName` called before `free()`
-- Panic drop glue: cleanup blocks run destructors on the panic path via setjmp/longjmp
+- Panic drop glue: cleanup blocks run destructors on the panic path via setjmp/longjmp, with drop flag checks for conditionally moved values
+- `catch_unwind(fn)` builtin for user-level panic recovery (native targets)
+- `--no-panic-unwind` flag traps on panic instead of unwinding (skips scope wrapping)
+- OOM in arena allocator triggers panic instead of silent NULL return
 
 ### Targets
 - **Wasm**: `asc build foo.ts -o foo.wasm` auto-links runtime via wasm-ld. Validated on wasmtime (fib(10)=55)
@@ -139,9 +142,9 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 | 0004 | Target Support | **~86%** |
 | 0005 | Ownership Model | **~88%** |
 | 0006 | Borrow Checker | **~83%** |
-| 0007 | Concurrency | ~40% |
-| 0008 | Memory Model | ~55% |
-| 0009 | Panic/Unwind | ~45% |
+| 0007 | Concurrency | **~48%** |
+| 0008 | Memory Model | **~68%** |
+| 0009 | Panic/Unwind | **~65%** |
 | 0010 | Toolchain/DX | **~80%** |
 | 0011 | Core Traits | **~93%** |
 | 0012 | Memory Module | **~87%** |
@@ -154,13 +157,13 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 | 0019 | Path/Config | **~72%** |
 | 0020 | Async Utilities | ~55% |
 
-**Overall weighted: ~82%**
+**Overall weighted: ~84%**
 
 ## Known Gaps
 
 1. **Closure captures for task.spawn** — spawned tasks can't access parent variables (no env struct)
 2. **Drop flags for conditional moves** — MaybeMoved warns but no runtime flag
-3. **Wasm EH** — uses setjmp/longjmp, not Wasm exception handling proposal
+3. **Wasm EH** — uses setjmp/longjmp, not Wasm exception handling proposal. catch_unwind available on native targets.
 4. **MPMC channels** — only SPSC ring buffer
 5. **Constant folding** — uses arith.constant at HIR, no Flang-style ConstantExpr
 6. **Multi-module linking** — import/export parses but no cross-module IR resolution
