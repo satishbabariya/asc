@@ -404,10 +404,108 @@ ExitCode Driver::runDoc() {
   return ExitCode::Success;
 }
 
+/// Convert a Type AST node to a human-readable string for LSP hover.
+static std::string typeToString(const Type *ty) {
+  if (!ty) return "unknown";
+  switch (ty->getKind()) {
+  case TypeKind::Builtin: {
+    auto *bt = static_cast<const BuiltinType *>(ty);
+    switch (bt->getBuiltinKind()) {
+    case BuiltinTypeKind::I8:    return "i8";
+    case BuiltinTypeKind::I16:   return "i16";
+    case BuiltinTypeKind::I32:   return "i32";
+    case BuiltinTypeKind::I64:   return "i64";
+    case BuiltinTypeKind::I128:  return "i128";
+    case BuiltinTypeKind::U8:    return "u8";
+    case BuiltinTypeKind::U16:   return "u16";
+    case BuiltinTypeKind::U32:   return "u32";
+    case BuiltinTypeKind::U64:   return "u64";
+    case BuiltinTypeKind::U128:  return "u128";
+    case BuiltinTypeKind::F32:   return "f32";
+    case BuiltinTypeKind::F64:   return "f64";
+    case BuiltinTypeKind::Bool:  return "bool";
+    case BuiltinTypeKind::Char:  return "char";
+    case BuiltinTypeKind::USize: return "usize";
+    case BuiltinTypeKind::ISize: return "isize";
+    case BuiltinTypeKind::Void:  return "void";
+    case BuiltinTypeKind::Never: return "never";
+    }
+    return "builtin";
+  }
+  case TypeKind::Named: {
+    auto *nt = static_cast<const NamedType *>(ty);
+    std::string s = nt->getName().str();
+    if (!nt->getGenericArgs().empty()) {
+      s += "<";
+      for (unsigned i = 0; i < nt->getGenericArgs().size(); ++i) {
+        if (i > 0) s += ", ";
+        s += typeToString(nt->getGenericArgs()[i]);
+      }
+      s += ">";
+    }
+    return s;
+  }
+  case TypeKind::Own:
+    return "own<" + typeToString(static_cast<const OwnType *>(ty)->getInner()) + ">";
+  case TypeKind::Ref:
+    return "ref<" + typeToString(static_cast<const RefType *>(ty)->getInner()) + ">";
+  case TypeKind::RefMut:
+    return "refmut<" + typeToString(static_cast<const RefMutType *>(ty)->getInner()) + ">";
+  case TypeKind::Array:
+    return "[" + typeToString(static_cast<const ArrayType *>(ty)->getElementType()) +
+           "; " + std::to_string(static_cast<const ArrayType *>(ty)->getSize()) + "]";
+  case TypeKind::Slice:
+    return "[" + typeToString(static_cast<const SliceType *>(ty)->getElementType()) + "]";
+  case TypeKind::Tuple: {
+    auto *tt = static_cast<const TupleType *>(ty);
+    std::string s = "(";
+    for (unsigned i = 0; i < tt->getElements().size(); ++i) {
+      if (i > 0) s += ", ";
+      s += typeToString(tt->getElements()[i]);
+    }
+    s += ")";
+    return s;
+  }
+  case TypeKind::Function: {
+    auto *ft = static_cast<const FunctionType *>(ty);
+    std::string s = "(";
+    for (unsigned i = 0; i < ft->getParamTypes().size(); ++i) {
+      if (i > 0) s += ", ";
+      s += typeToString(ft->getParamTypes()[i]);
+    }
+    s += ") -> " + typeToString(ft->getReturnType());
+    return s;
+  }
+  case TypeKind::Nullable:
+    return typeToString(static_cast<const NullableType *>(ty)->getInner()) + " | null";
+  case TypeKind::Generic:
+    return static_cast<const GenericType *>(ty)->getName().str();
+  case TypeKind::Inferred:
+    return "_";
+  case TypeKind::DynTrait:
+    return "dyn Trait";
+  case TypeKind::Path: {
+    auto *pt = static_cast<const PathType *>(ty);
+    std::string s;
+    for (unsigned i = 0; i < pt->getSegments().size(); ++i) {
+      if (i > 0) s += "::";
+      s += pt->getSegments()[i];
+    }
+    return s;
+  }
+  }
+  return "type";
+}
+
 ExitCode Driver::runLsp() {
   // Minimal LSP server: read JSON-RPC from stdin, respond on stdout.
   // Supports: initialize, textDocument/didOpen (with diagnostics).
   llvm::errs() << "asc LSP server starting...\n";
+
+  // Persistent state for hover/definition: last-parsed AST and source manager.
+  std::vector<Decl *> astItems;
+  std::unique_ptr<SourceManager> lspSMPersist;
+  std::unique_ptr<ASTContext> lspCtxPersist;
 
   std::string line;
   while (std::getline(std::cin, line)) {
@@ -468,23 +566,28 @@ ExitCode Driver::runLsp() {
           filePath = filePath.substr(7);
 
         // Run the check pipeline on this file and collect diagnostics.
+        // Reuse persistent SourceManager/ASTContext so hover/definition can
+        // reference the last-parsed AST.
         std::string diagJson = "[]";
         if (!filePath.empty() && llvm::sys::fs::exists(filePath)) {
-          SourceManager lspSM;
-          auto lspDiags = std::make_unique<DiagnosticEngine>(lspSM);
+          lspSMPersist = std::make_unique<SourceManager>();
+          lspCtxPersist = std::make_unique<ASTContext>();
+          astItems.clear();
+
+          auto lspDiags = std::make_unique<DiagnosticEngine>(*lspSMPersist);
           // Suppress rendering to stderr — we collect diagnostics programmatically.
           llvm::raw_null_ostream nullStream;
           lspDiags->setOutputStream(nullStream);
 
-          auto fileID = lspSM.loadFile(filePath);
+          auto fileID = lspSMPersist->loadFile(filePath);
           if (fileID.isValid()) {
-            Lexer lexer(fileID, lspSM, *lspDiags);
-            ASTContext lspCtx;
-            Parser parser(lexer, lspCtx, *lspDiags);
+            Lexer lexer(fileID, *lspSMPersist, *lspDiags);
+            Parser parser(lexer, *lspCtxPersist, *lspDiags);
             auto decls = parser.parseProgram();
+            astItems = decls;
 
             if (!decls.empty() && !lspDiags->hasErrors()) {
-              Sema sema(lspCtx, *lspDiags);
+              Sema sema(*lspCtxPersist, *lspDiags);
               sema.analyze(decls);
             }
 
@@ -496,7 +599,7 @@ ExitCode Driver::runLsp() {
               for (const auto &d : diags_list) {
                 if (!first) diagJson += ",";
                 first = false;
-                auto lc = lspSM.getLineAndColumn(d.location);
+                auto lc = lspSMPersist->getLineAndColumn(d.location);
                 unsigned line = lc.line > 0 ? lc.line - 1 : 0;
                 unsigned col = lc.column > 0 ? lc.column - 1 : 0;
                 int severity = (d.severity == DiagnosticSeverity::Error) ? 1
@@ -533,7 +636,6 @@ ExitCode Driver::runLsp() {
 
       // Handle textDocument/hover — return type info for symbol under cursor.
       if (body.find("\"textDocument/hover\"") != std::string::npos) {
-        // Extract request ID.
         std::string reqId = "0";
         auto idPos = body.find("\"id\"");
         if (idPos != std::string::npos) {
@@ -541,16 +643,6 @@ ExitCode Driver::runLsp() {
           auto end = body.find_first_not_of("0123456789", start);
           if (start != std::string::npos)
             reqId = body.substr(start, end - start);
-        }
-
-        // Extract URI and position.
-        std::string uri;
-        auto uriPos = body.find("\"uri\"");
-        if (uriPos != std::string::npos) {
-          auto start = body.find('"', uriPos + 5) + 1;
-          auto end = body.find('"', start);
-          if (start != std::string::npos && end != std::string::npos)
-            uri = body.substr(start, end - start);
         }
 
         unsigned hoverLine = 0, hoverChar = 0;
@@ -569,24 +661,56 @@ ExitCode Driver::runLsp() {
             hoverChar = std::stoul(body.substr(start, end - start));
         }
 
-        // For now, return a simple hover response with the file and position.
-        // A full implementation would parse the file, run Sema, find the symbol
-        // at the position, and return its type.
-        std::string hoverContent = "asc: line " + std::to_string(hoverLine + 1) +
-                                    ", col " + std::to_string(hoverChar + 1);
+        unsigned targetLine = hoverLine + 1;
+        std::string hoverContent;
+
+        if (lspSMPersist) {
+          for (auto *decl : astItems) {
+            auto loc = decl->getLocation();
+            if (!loc.isValid()) continue;
+            auto lc = lspSMPersist->getLineAndColumn(loc);
+            if (lc.line == targetLine) {
+              if (auto *fd = dynamic_cast<FunctionDecl *>(decl)) {
+                std::string sig = "fn " + fd->getName().str();
+                sig += "(";
+                for (unsigned i = 0; i < fd->getParams().size(); ++i) {
+                  if (i > 0) sig += ", ";
+                  auto &p = fd->getParams()[i];
+                  if (p.type) sig += typeToString(p.type);
+                }
+                sig += ")";
+                if (fd->getReturnType())
+                  sig += " -> " + typeToString(fd->getReturnType());
+                hoverContent = sig;
+              } else if (auto *sd = dynamic_cast<StructDecl *>(decl)) {
+                hoverContent = "struct " + sd->getName().str();
+              } else if (auto *ed = dynamic_cast<EnumDecl *>(decl)) {
+                hoverContent = "enum " + ed->getName().str();
+              } else if (auto *td = dynamic_cast<TraitDecl *>(decl)) {
+                hoverContent = "trait " + td->getName().str();
+              } else {
+                hoverContent = "decl at line " + std::to_string(targetLine);
+              }
+              break;
+            }
+          }
+        }
+
+        if (hoverContent.empty())
+          hoverContent = "asc: line " + std::to_string(targetLine) +
+                         ", col " + std::to_string(hoverChar + 1);
 
         std::string response =
             R"({"jsonrpc":"2.0","id":)" + reqId +
-            R"(,"result":{"contents":{"kind":"plaintext","value":")" +
-            hoverContent + R"("}}})";
+            R"(,"result":{"contents":{"kind":"markdown","value":"```\n)" +
+            hoverContent + R"(\n```"}}})";
         llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
                      << response;
         llvm::outs().flush();
         continue;
       }
 
-      // Handle textDocument/definition — stub returning null (no location).
-      // A full implementation would resolve symbols to their definition site.
+      // Handle textDocument/definition — resolve symbol to its definition.
       if (body.find("\"textDocument/definition\"") != std::string::npos) {
         std::string reqId = "0";
         auto idPos = body.find("\"id\"");
@@ -597,9 +721,54 @@ ExitCode Driver::runLsp() {
             reqId = body.substr(start, end - start);
         }
 
-        std::string response =
-            R"({"jsonrpc":"2.0","id":)" + reqId +
-            R"(,"result":null})";
+        std::string uri;
+        auto uriPos = body.find("\"uri\"");
+        if (uriPos != std::string::npos) {
+          auto start = body.find('"', uriPos + 5) + 1;
+          auto end = body.find('"', start);
+          if (start != std::string::npos && end != std::string::npos)
+            uri = body.substr(start, end - start);
+        }
+
+        unsigned defLine = 0;
+        auto linePos = body.find("\"line\"");
+        if (linePos != std::string::npos) {
+          auto start = body.find_first_of("0123456789", linePos + 6);
+          auto end = body.find_first_not_of("0123456789", start);
+          if (start != std::string::npos)
+            defLine = std::stoul(body.substr(start, end - start));
+        }
+
+        unsigned targetLine = defLine + 1;
+        std::string response;
+        bool found = false;
+
+        if (lspSMPersist) {
+          for (auto *decl : astItems) {
+            auto loc = decl->getLocation();
+            if (!loc.isValid()) continue;
+            auto lc = lspSMPersist->getLineAndColumn(loc);
+            if (lc.line == targetLine) {
+              response =
+                  R"({"jsonrpc":"2.0","id":)" + reqId +
+                  R"(,"result":{"uri":")" + uri +
+                  R"(","range":{"start":{"line":)" +
+                  std::to_string(lc.line - 1) +
+                  R"(,"character":0},"end":{"line":)" +
+                  std::to_string(lc.line - 1) +
+                  R"(,"character":0}}}})";
+              found = true;
+              break;
+            }
+          }
+        }
+
+        if (!found) {
+          response =
+              R"({"jsonrpc":"2.0","id":)" + reqId +
+              R"(,"result":null})";
+        }
+
         llvm::outs() << "Content-Length: " << response.size() << "\r\n\r\n"
                      << response;
         llvm::outs().flush();

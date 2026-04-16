@@ -83,8 +83,11 @@ StackSizeAnalysisPass::estimateStackUsageLLVM(mlir::LLVM::LLVMFuncOp func) {
 
 uint64_t StackSizeAnalysisPass::walkCallGraph(
     mlir::func::FuncOp func, llvm::DenseSet<mlir::Operation *> &visited) {
-  if (!visited.insert(func.getOperation()).second)
-    return 0; // Recursive — don't double-count.
+  if (!visited.insert(func.getOperation()).second) {
+    func->emitWarning("potential unbounded recursion detected in function '")
+        << func.getName() << "' — stack size estimate may be inaccurate";
+    return 0;
+  }
 
   uint64_t local = estimateStackUsage(func);
   uint64_t maxCallee = 0;
@@ -106,8 +109,11 @@ uint64_t StackSizeAnalysisPass::walkCallGraph(
 uint64_t StackSizeAnalysisPass::walkCallGraphLLVM(
     mlir::LLVM::LLVMFuncOp func,
     llvm::DenseSet<mlir::Operation *> &visited) {
-  if (!visited.insert(func.getOperation()).second)
+  if (!visited.insert(func.getOperation()).second) {
+    func->emitWarning("potential unbounded recursion detected in function '")
+        << func.getName() << "' — stack size estimate may be inaccurate";
     return 0;
+  }
 
   uint64_t local = estimateStackUsageLLVM(func);
   uint64_t maxCallee = 0;
