@@ -261,6 +261,49 @@ void __asc_panic(const char *msg, unsigned int msg_len,
 #endif
 }
 
+// catch_unwind — runs a closure and catches any panic (RFC-0009).
+// Returns 0 on success, 1 if a panic was caught.
+// On panic, out_info is filled with the PanicInfo.
+#ifndef __wasm__
+int __asc_catch_unwind(void *(*fn)(void *), void *arg, PanicInfo *out_info) {
+  // Save current handler state.
+  jmp_buf *prev_jmpbuf = __asc_panic_jmpbuf;
+  int prev_unwind = __asc_in_unwind;
+
+  // Set up new handler.
+  jmp_buf buf;
+  __asc_panic_jmpbuf = &buf;
+  __asc_in_unwind = 0;
+
+  if (setjmp(buf) == 0) {
+    // Normal path: call the closure.
+    fn(arg);
+    // Restore previous handler.
+    __asc_panic_jmpbuf = prev_jmpbuf;
+    __asc_in_unwind = prev_unwind;
+    return 0;
+  } else {
+    // Panic path: longjmp returned here.
+    if (out_info) {
+      *out_info = __asc_panic_info;
+    }
+    // Clear unwind flag and restore previous handler.
+    __asc_in_unwind = prev_unwind;
+    __asc_panic_jmpbuf = prev_jmpbuf;
+    return 1;
+  }
+}
+#endif
+
+#ifdef __wasm__
+int __asc_catch_unwind(void *(*fn)(void *), void *arg, void *out_info) {
+  // On Wasm without EH, panics trap — cannot be caught.
+  // Call the function directly; if it panics, the whole program traps.
+  fn(arg);
+  return 0;
+}
+#endif
+
 // Print functions — defined in wasi_io.c for wasm, here for native only.
 // Note: __asc_print and __asc_eprint are in wasi_io.c to avoid duplicates.
 
