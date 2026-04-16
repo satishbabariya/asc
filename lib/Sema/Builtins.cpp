@@ -961,6 +961,106 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     sym.decl = derefMutTrait;
     scope->declare("DerefMut", std::move(sym));
   }
+
+  // IntoIterator trait: fn into_iter(own<Self>): own<IntoIter>
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfType;
+    selfParam.loc = loc;
+    auto *intoIterMethod = ctx.create<FunctionDecl>(
+        "into_iter", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam},
+        ctx.create<NamedType>("IntoIter", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem intoIterItem;
+    intoIterItem.method = intoIterMethod;
+    TraitItem itemAssoc;
+    itemAssoc.assocTypeName = "Item";
+    itemAssoc.isAssocType = true;
+    TraitItem iterAssoc;
+    iterAssoc.assocTypeName = "IntoIter";
+    iterAssoc.isAssocType = true;
+    auto *intoIterTrait = ctx.create<TraitDecl>(
+        "IntoIterator", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{itemAssoc, iterAssoc, intoIterItem}, loc);
+    traitDecls["IntoIterator"] = intoIterTrait;
+    Symbol sym;
+    sym.name = "IntoIterator";
+    sym.decl = intoIterTrait;
+    scope->declare("IntoIterator", std::move(sym));
+  }
+
+  // FromIterator<T> trait: fn from_iter(iter): own<Self>
+  {
+    GenericParam gp;
+    gp.name = "T";
+    gp.loc = loc;
+    GenericParam gpI;
+    gpI.name = "I";
+    gpI.loc = loc;
+    ParamDecl iterParam;
+    iterParam.name = "iter";
+    iterParam.type = ctx.create<NamedType>("I", std::vector<Type *>{}, loc);
+    iterParam.loc = loc;
+    auto *fromIterMethod = ctx.create<FunctionDecl>(
+        "from_iter", std::vector<GenericParam>{gpI},
+        std::vector<ParamDecl>{iterParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem fromIterItem;
+    fromIterItem.method = fromIterMethod;
+    auto *fromIterTrait = ctx.create<TraitDecl>(
+        "FromIterator", std::vector<GenericParam>{gp},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{fromIterItem}, loc);
+    traitDecls["FromIterator"] = fromIterTrait;
+    Symbol sym;
+    sym.name = "FromIterator";
+    sym.decl = fromIterTrait;
+    scope->declare("FromIterator", std::move(sym));
+  }
+
+  // IndexMut<Idx> trait: fn index_mut(refmut<Self>, Idx): refmut<Output>
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    ParamDecl idxParam;
+    idxParam.name = "index";
+    idxParam.type = ctx.getBuiltinType(BuiltinTypeKind::USize);
+    idxParam.loc = loc;
+    auto *outputType = ctx.create<NamedType>("Output", std::vector<Type *>{}, loc);
+    auto *refMutOutputType = ctx.create<RefMutType>(outputType, loc);
+    auto *indexMutMethod = ctx.create<FunctionDecl>(
+        "index_mut", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, idxParam},
+        refMutOutputType, nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem indexMutItem;
+    indexMutItem.method = indexMutMethod;
+    TraitItem outputAssoc;
+    outputAssoc.assocTypeName = "Output";
+    outputAssoc.isAssocType = true;
+    GenericParam gp;
+    gp.name = "Output";
+    gp.loc = loc;
+    auto *indexMutTrait = ctx.create<TraitDecl>(
+        "IndexMut", std::vector<GenericParam>{gp},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{outputAssoc, indexMutItem}, loc);
+    traitDecls["IndexMut"] = indexMutTrait;
+    Symbol sym;
+    sym.name = "IndexMut";
+    sym.decl = indexMutTrait;
+    scope->declare("IndexMut", std::move(sym));
+  }
 }
 
 } // namespace asc
