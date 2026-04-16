@@ -220,9 +220,10 @@ void Sema::checkCompoundStmt(CompoundStmt *s) {
     // Skip if already warned via W004 (owned non-copy).
     if (sym.type && !isCopyType(sym.type) && !sym.ownership.isCopy)
       return;
-    diags.emitWarning(sym.decl->getLocation(), DiagID::WarnUnusedVariable,
-                      "unused variable '" + name.str() +
-                      "' — consider prefixing with '_' to silence");
+    diags.report(sym.decl->getLocation(), DiagID::WarnUnusedVariable,
+                 "unused variable '" + name.str() + "'")
+        .addFixIt(SourceRange{sym.decl->getLocation(), sym.decl->getLocation()},
+                  "_" + name.str());
   });
 
   popScope();
