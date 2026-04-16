@@ -150,6 +150,75 @@ function is_absolute(path: ref<str>): bool {
   return bytes.len() > 0 && bytes[0] == SEPARATOR_BYTE;
 }
 
+/// Resolve a sequence of path segments into an absolute path.
+/// If no segment is absolute, the result is relative to the current working
+/// directory (represented as "/").
+function resolve(parts: ref<[ref<str>]>): own<String> {
+  let result = String::new();
+  // Walk segments right-to-left; the first absolute one anchors.
+  let i = parts.len();
+  while i > 0 {
+    i = i - 1;
+    let part = parts[i];
+    if part.len() == 0 { continue; }
+    if result.len() > 0 {
+      let tmp = String::from(part);
+      tmp.push(SEPARATOR);
+      tmp.push_str(result.as_str());
+      result = tmp;
+    } else {
+      result = String::from(part);
+    }
+    if part.as_bytes()[0] == SEPARATOR_BYTE {
+      // Hit an absolute segment — stop.
+      return normalize(result.as_str());
+    }
+  }
+  // No absolute segment found — prepend root.
+  let abs = String::from("/");
+  if result.len() > 0 {
+    abs.push_str(result.as_str());
+  }
+  return normalize(abs.as_str());
+}
+
+/// Replace the extension of a path. `ext` should include the leading dot,
+/// e.g. ".md". Pass "" to strip the extension entirely.
+function with_extname(path: ref<str>, ext: ref<str>): own<String> {
+  let dir = dirname(path);
+  let base = basename(path);
+  // Strip old extension from basename.
+  let old_ext = extname(base.as_str());
+  let stem_len = base.len() - old_ext.len();
+  let stem = base.as_str().slice(0, stem_len);
+
+  let result = String::from(dir.as_str());
+  if result.as_str() != "/" && result.as_str() != "." || dir.as_str() != "." {
+    if dir.as_str() != "." {
+      result.push(SEPARATOR);
+    } else {
+      result = String::new();
+    }
+  }
+  result.push_str(stem);
+  result.push_str(ext);
+  return result;
+}
+
+/// Replace the basename (file name) component of a path.
+function with_basename(path: ref<str>, name: ref<str>): own<String> {
+  let dir = dirname(path);
+  if dir.as_str() == "/" {
+    let result = String::from("/");
+    result.push_str(name);
+    return result;
+  }
+  let result = String::from(dir.as_str());
+  result.push(SEPARATOR);
+  result.push_str(name);
+  return result;
+}
+
 /// Compute relative path from `from` to `to`.
 function relative(from: ref<str>, to: ref<str>): own<String> {
   let norm_from = normalize(from);

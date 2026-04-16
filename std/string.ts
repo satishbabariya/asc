@@ -100,6 +100,125 @@ impl String {
     return result;
   }
 
+  fn find(ref<Self>, pattern: ref<str>): Option<usize> {
+    const plen = pattern.len();
+    if plen == 0 { return Option::Some(0); }
+    if plen > self.len { return Option::None; }
+    let i: usize = 0;
+    const limit = self.len - plen + 1;
+    const pptr = pattern.as_ptr();
+    while i < limit {
+      let matched = true;
+      let j: usize = 0;
+      while j < plen {
+        if self.ptr[i + j] != pptr[j] { matched = false; break; }
+        j = j + 1;
+      }
+      if matched { return Option::Some(i); }
+      i = i + 1;
+    }
+    return Option::None;
+  }
+
+  fn trim(ref<Self>): ref<str> {
+    let start: usize = 0;
+    while start < self.len && String::is_ascii_whitespace(self.ptr[start]) {
+      start = start + 1;
+    }
+    let end: usize = self.len;
+    while end > start && String::is_ascii_whitespace(self.ptr[end - 1]) {
+      end = end - 1;
+    }
+    return unsafe { str::from_raw_parts((self.ptr as usize + start) as *const u8, end - start) };
+  }
+
+  fn trim_start(ref<Self>): ref<str> {
+    let start: usize = 0;
+    while start < self.len && String::is_ascii_whitespace(self.ptr[start]) {
+      start = start + 1;
+    }
+    return unsafe { str::from_raw_parts((self.ptr as usize + start) as *const u8, self.len - start) };
+  }
+
+  fn trim_end(ref<Self>): ref<str> {
+    let end: usize = self.len;
+    while end > 0 && String::is_ascii_whitespace(self.ptr[end - 1]) {
+      end = end - 1;
+    }
+    return unsafe { str::from_raw_parts(self.ptr as *const u8, end) };
+  }
+
+  fn is_ascii_whitespace(c: u8): bool {
+    return c == 32 || c == 9 || c == 10 || c == 13;
+  }
+
+  fn split(ref<Self>, sep: ref<str>): own<Vec<ref<str>>> {
+    let result: Vec<ref<str>> = Vec::new();
+    const slen = sep.len();
+    if slen == 0 {
+      result.push(self.as_str());
+      return result;
+    }
+    let start: usize = 0;
+    let i: usize = 0;
+    const sep_ptr = sep.as_ptr();
+    while i + slen <= self.len {
+      let matched = true;
+      let j: usize = 0;
+      while j < slen {
+        if self.ptr[i + j] != sep_ptr[j] { matched = false; break; }
+        j = j + 1;
+      }
+      if matched {
+        const part = unsafe { str::from_raw_parts((self.ptr as usize + start) as *const u8, i - start) };
+        result.push(part);
+        start = i + slen;
+        i = start;
+      } else {
+        i = i + 1;
+      }
+    }
+    const last_part = unsafe { str::from_raw_parts((self.ptr as usize + start) as *const u8, self.len - start) };
+    result.push(last_part);
+    return result;
+  }
+
+  fn replace(ref<Self>, from: ref<str>, to: ref<str>): own<String> {
+    let result = String::new();
+    const flen = from.len();
+    if flen == 0 {
+      result.push_str(self.as_str());
+      return result;
+    }
+    let start: usize = 0;
+    let i: usize = 0;
+    const from_ptr = from.as_ptr();
+    while i + flen <= self.len {
+      let matched = true;
+      let j: usize = 0;
+      while j < flen {
+        if self.ptr[i + j] != from_ptr[j] { matched = false; break; }
+        j = j + 1;
+      }
+      if matched {
+        const segment = unsafe { str::from_raw_parts((self.ptr as usize + start) as *const u8, i - start) };
+        result.push_str(segment);
+        result.push_str(to);
+        start = i + flen;
+        i = start;
+      } else {
+        i = i + 1;
+      }
+    }
+    const tail = unsafe { str::from_raw_parts((self.ptr as usize + start) as *const u8, self.len - start) };
+    result.push_str(tail);
+    return result;
+  }
+
+  fn as_bytes(ref<Self>): ref<[u8]> {
+    return unsafe { slice::from_raw_parts(self.ptr as *const u8, self.len) };
+  }
+
   // Internal: ensure capacity for at least `min_cap` bytes.
   fn ensure_capacity(refmut<Self>, min_cap: usize): void {
     if min_cap <= self.cap { return; }

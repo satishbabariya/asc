@@ -101,6 +101,50 @@ trait Iterator {
   fn product<P: Mul + Default>(own<Self>): own<P> {
     return self.fold(P::default(), (acc, x) => acc * x);
   }
+
+  fn max(own<Self>): Option<own<Item>> where Item: Ord {
+    let result: Option<own<Item>> = Option::None;
+    loop {
+      match self.next() {
+        Option::Some(v) => {
+          match result {
+            Option::None => { result = Option::Some(v); },
+            Option::Some(ref current) => {
+              match v.cmp(current) {
+                Ordering::Greater => { result = Option::Some(v); },
+                _ => {},
+              }
+            },
+          }
+        },
+        Option::None => { return result; },
+      }
+    }
+  }
+
+  fn min(own<Self>): Option<own<Item>> where Item: Ord {
+    let result: Option<own<Item>> = Option::None;
+    loop {
+      match self.next() {
+        Option::Some(v) => {
+          match result {
+            Option::None => { result = Option::Some(v); },
+            Option::Some(ref current) => {
+              match v.cmp(current) {
+                Ordering::Less => { result = Option::Some(v); },
+                _ => {},
+              }
+            },
+          }
+        },
+        Option::None => { return result; },
+      }
+    }
+  }
+
+  fn peekable(own<Self>): own<Peekable<Self>> {
+    return Peekable { iter: self, peeked: Option::None };
+  }
 }
 
 /// Conversion into an Iterator.
@@ -242,6 +286,34 @@ impl<A: Iterator, B: Iterator> Iterator for Zip<A, B> {
         }
       },
       Option::None => { return Option::None; },
+    }
+  }
+}
+
+/// Iterator adapter that caches one element for peeking.
+struct Peekable<I: Iterator> {
+  iter: own<I>,
+  peeked: Option<own<I::Item>>,
+}
+
+impl<I: Iterator> Peekable<I> {
+  fn peek(refmut<Self>): Option<ref<I::Item>> {
+    if self.peeked.is_none() {
+      self.peeked = self.iter.next();
+    }
+    match self.peeked {
+      Option::Some(ref v) => { return Option::Some(v); },
+      Option::None => { return Option::None; },
+    }
+  }
+}
+
+impl<I: Iterator> Iterator for Peekable<I> {
+  type Item = I::Item;
+  fn next(refmut<Self>): Option<own<I::Item>> {
+    match self.peeked.take() {
+      Option::Some(v) => { return Option::Some(v); },
+      Option::None => { return self.iter.next(); },
     }
   }
 }
