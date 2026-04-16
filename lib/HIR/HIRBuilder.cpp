@@ -1066,6 +1066,68 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
     }
   }
 
+  // catch_unwind(fn) → call __asc_catch_unwind(wrapper, null, null)
+  // Returns i32: 0 = success, 1 = panic caught.
+  if (calleeName == "catch_unwind") {
+    if (!e->getArgs().empty()) {
+      std::string closureFnName;
+      if (auto *dref = dynamic_cast<DeclRefExpr *>(e->getArgs()[0]))
+        closureFnName = dref->getName().str();
+      else if (auto *pathExpr = dynamic_cast<PathExpr *>(e->getArgs()[0])) {
+        if (!pathExpr->getSegments().empty())
+          closureFnName = pathExpr->getSegments().back();
+      }
+
+      if (!closureFnName.empty()) {
+        auto ptrType = getPtrType();
+        auto i32Type = builder.getIntegerType(32);
+
+        // Generate wrapper: ptr __catch_N_wrapper(ptr arg) { call fn(); return null; }
+        static unsigned catchCounter = 0;
+        std::string wrapperName = "__catch_" + std::to_string(catchCounter++) + "_wrapper";
+
+        auto savedIP = builder.saveInsertionPoint();
+        builder.setInsertionPointToEnd(module.getBody());
+
+        auto wrapperFnType = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+        auto wrapperFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+            location, wrapperName, wrapperFnType);
+        auto *entryBlock = wrapperFn.addEntryBlock();
+        builder.setInsertionPointToStart(entryBlock);
+
+        auto closureCallee = module.lookupSymbol<mlir::func::FuncOp>(closureFnName);
+        if (closureCallee) {
+          builder.create<mlir::func::CallOp>(location, closureCallee, mlir::ValueRange{});
+        }
+        auto null = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+        builder.create<mlir::LLVM::ReturnOp>(location, mlir::ValueRange{null});
+        builder.restoreInsertionPoint(savedIP);
+
+        // Declare __asc_catch_unwind: i32 (ptr fn, ptr arg, ptr out_info)
+        auto catchFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_catch_unwind");
+        if (!catchFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type,
+              {ptrType, ptrType, ptrType});
+          catchFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+              location, "__asc_catch_unwind", fnType);
+        }
+
+        // Get wrapper function pointer.
+        auto wrapperAddr = builder.create<mlir::LLVM::AddressOfOp>(
+            location, ptrType, wrapperName);
+        auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+
+        // Call __asc_catch_unwind(wrapper, null, null).
+        auto result = builder.create<mlir::LLVM::CallOp>(location, catchFn,
+            mlir::ValueRange{wrapperAddr, nullArg, nullArg}).getResult();
+        return result;
+      }
+    }
+    return {};
+  }
+
   // Emit arguments with ownership-aware wrapping.
   llvm::SmallVector<mlir::Value> args;
   for (unsigned i = 0; i < e->getArgs().size(); ++i) {

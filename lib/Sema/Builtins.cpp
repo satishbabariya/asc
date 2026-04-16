@@ -1036,6 +1036,26 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("FromIterator", std::move(sym));
   }
 
+  // --- Built-in functions ---
+
+  // catch_unwind(fn): i32 — catches panics, returns 0 on success, 1 on panic.
+  {
+    ParamDecl fnParam;
+    fnParam.name = "f";
+    fnParam.type = ctx.create<NamedType>("Function", std::vector<Type *>{}, loc);
+    fnParam.loc = loc;
+    auto *catchFn = ctx.create<FunctionDecl>(
+        "catch_unwind", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{fnParam},
+        ctx.getBuiltinType(BuiltinTypeKind::I32), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    Symbol sym;
+    sym.name = "catch_unwind";
+    sym.decl = catchFn;
+    sym.type = ctx.getBuiltinType(BuiltinTypeKind::I32);
+    scope->declare("catch_unwind", std::move(sym));
+  }
+
   // IndexMut<Idx> trait: fn index_mut(refmut<Self>, Idx): refmut<Output>
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
