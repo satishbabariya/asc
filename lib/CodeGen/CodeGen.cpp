@@ -13,6 +13,7 @@
 #include "mlir/Target/LLVMIR/Dialect/All.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -125,6 +126,16 @@ bool CodeGenerator::translateToLLVMIR(mlir::ModuleOp module) {
     return false;
   }
   llvmModule->setTargetTriple(opts.targetTriple);
+
+  // Emit __asc_max_threads global to override weak default in runtime (RFC-0008).
+  if (opts.maxThreads != 4) {
+    new llvm::GlobalVariable(
+        *llvmModule, llvm::Type::getInt32Ty(llvmContext),
+        /*isConstant=*/true, llvm::GlobalValue::ExternalLinkage,
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(llvmContext),
+                               opts.maxThreads),
+        "__asc_max_threads");
+  }
 
   // Warn about experimental GPU targets.
   llvm::Triple triple(opts.targetTriple);

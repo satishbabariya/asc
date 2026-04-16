@@ -55,6 +55,10 @@ extern void free(void *ptr);
 #endif
 
 #define ASC_DEFAULT_ARENA_SIZE (1024 * 1024) /* 1 MB */
+#define PER_THREAD_STACK_SIZE (256 * 1024)  /* 256 KB per thread stack */
+
+// Weak default — compiler emits a strong definition via --max-threads to override.
+__attribute__((weak)) unsigned int __asc_max_threads = 4;
 
 #ifdef __wasm__
 static unsigned char __asc_arena_buf[ASC_DEFAULT_ARENA_SIZE];
@@ -68,10 +72,14 @@ _Thread_local static unsigned char *__asc_arena_end = 0;
 
 void __asc_arena_init(unsigned long size) {
 #ifndef __wasm__
+  unsigned long thread_arena = (unsigned long)__asc_max_threads * PER_THREAD_STACK_SIZE;
+  unsigned long actual_size = size > thread_arena ? size : thread_arena;
+  if (actual_size < ASC_DEFAULT_ARENA_SIZE)
+    actual_size = ASC_DEFAULT_ARENA_SIZE;
   if (__asc_arena_buf) free(__asc_arena_buf);
-  __asc_arena_buf = (unsigned char *)malloc(size);
+  __asc_arena_buf = (unsigned char *)malloc(actual_size);
   __asc_arena_ptr = __asc_arena_buf;
-  __asc_arena_end = __asc_arena_buf + size;
+  __asc_arena_end = __asc_arena_buf + actual_size;
 #endif
 }
 
