@@ -71,6 +71,40 @@ function decode(input: ref<str>): own<String> {
   return result;
 }
 
+/// Encode with percent-encoding, preserving chars in `safe` unencoded.
+function encode_except(input: ref<str>, safe: ref<str>): own<String> {
+  let result = String::new();
+  let bytes = input.as_bytes();
+  let safe_bytes = safe.as_bytes();
+  let i: usize = 0;
+  while i < bytes.len() {
+    let c = bytes[i];
+    if is_unreserved(c) {
+      result.push(c as char);
+    } else {
+      let is_safe = false;
+      let j: usize = 0;
+      while j < safe_bytes.len() {
+        if c == safe_bytes[j] { is_safe = true; break; }
+        j = j + 1;
+      }
+      if is_safe {
+        result.push(c as char);
+      } else {
+        result.push('%');
+        let hx: [u8; 16] = [
+          0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+          0x38, 0x39, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
+        ];
+        result.push(hx[(c >> 4) as usize] as char);
+        result.push(hx[(c & 0x0F) as usize] as char);
+      }
+    }
+    i = i + 1;
+  }
+  return result;
+}
+
 /// Encode a URI component. Same as encode — all bytes except unreserved
 /// characters (A-Z a-z 0-9 - . _ ~) are percent-encoded.
 /// This matches the behavior of JavaScript's encodeURIComponent for

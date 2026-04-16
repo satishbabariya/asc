@@ -135,3 +135,41 @@ function decode_i32(input: ref<[u8]>): Result<(i32, usize), VarintError> {
 
   return Result::Ok((result, i));
 }
+
+/// Encode a signed i64 as signed LEB128.
+function encode_i64(buf: refmut<Vec<u8>>, value: i64): void {
+  let v = value;
+  let more = true;
+  while more {
+    let byte = (v & 0x7F) as u8;
+    v = v >> 7;
+    if (v == 0 && (byte & 0x40) == 0) || (v == -1 && (byte & 0x40) != 0) {
+      more = false;
+    } else {
+      byte = byte | 0x80;
+    }
+    buf.push(byte);
+  }
+}
+
+/// Decode a signed LEB128 i64 from a byte slice.
+function decode_i64(input: ref<[u8]>): Result<(i64, usize), VarintError> {
+  let result: i64 = 0;
+  let shift: u32 = 0;
+  let i: usize = 0;
+  let byte: u8 = 0;
+  while i < input.len() {
+    byte = input[i];
+    if shift >= 70 { return Result::Err(VarintError::Overflow); }
+    result = result | (((byte & 0x7F) as i64) << shift);
+    shift = shift + 7;
+    i = i + 1;
+    if (byte & 0x80) == 0 { break; }
+  }
+  if i == 0 { return Result::Err(VarintError::UnexpectedEof); }
+  if (byte & 0x80) != 0 { return Result::Err(VarintError::UnexpectedEof); }
+  if shift < 64 && (byte & 0x40) != 0 {
+    result = result | ((-1 as i64) << shift);
+  }
+  return Result::Ok((result, i));
+}

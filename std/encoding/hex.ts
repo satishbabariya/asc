@@ -45,3 +45,21 @@ function hex_val(c: u8, pos: usize): Result<u8, DecodeError> {
   if c >= 0x61 && c <= 0x66 { return Result::Ok(c - 0x61 + 10); }  // a-f
   return Result::Err(DecodeError::InvalidCharacter(pos));
 }
+
+const HEX_UPPER: [u8; 16] = [
+  0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+  0x38, 0x39, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46,
+];
+
+/// Encode bytes as uppercase hexadecimal string.
+function encode_upper(input: ref<[u8]>): own<String> {
+  let result = String::with_capacity(input.len() * 2);
+  let i: usize = 0;
+  while i < input.len() {
+    let b = input[i];
+    result.push(HEX_UPPER[(b >> 4) as usize] as char);
+    result.push(HEX_UPPER[(b & 0x0F) as usize] as char);
+    i = i + 1;
+  }
+  return result;
+}
