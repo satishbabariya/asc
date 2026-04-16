@@ -1097,8 +1097,11 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         v = emitBorrowMut(v, location);
       break;
     default:
-      // RFC-0005: own.copy requires @copy attribute (validated by Sema).
-      // TODO: emit own::OwnCopyOp here for @copy aggregate types passed by value.
+      // RFC-0005: own.copy for @copy aggregate types passed by value.
+      if (mlir::isa<own::OwnValType>(v.getType())) {
+        auto copyOp = builder.create<own::OwnCopyOp>(location, v);
+        v = copyOp->getResult(0);
+      }
       break;
     }
     args.push_back(v);
