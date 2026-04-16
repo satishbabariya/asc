@@ -44,7 +44,123 @@ void Sema::popScope() {
     currentScope = currentScope->getParent();
 }
 
+/// Synthesize impl blocks for @derive attributes on structs.
+static void synthesizeDeriveImpls(ASTContext &ctx,
+                                   std::vector<Decl *> &items) {
+  std::vector<Decl *> syntheticImpls;
+
+  for (auto *item : items) {
+    auto *sd = dynamic_cast<StructDecl *>(item);
+    if (!sd) continue;
+
+    SourceLocation loc = sd->getLocation();
+    std::string typeName = sd->getName().str();
+
+    bool hasClone = false, hasPartialEq = false;
+    for (const auto &attr : sd->getAttributes()) {
+      if (attr == "@clone") hasClone = true;
+      if (attr == "@partialeq") hasPartialEq = true;
+    }
+
+    // derive(Clone): fn clone(ref<Self>): own<Type> { return Type { f1: self.f1, ... }; }
+    if (hasClone) {
+      std::vector<FieldInit> fieldInits;
+      for (auto *field : sd->getFields()) {
+        auto *selfRef = ctx.create<DeclRefExpr>("self", loc);
+        auto *fieldAccess = ctx.create<FieldAccessExpr>(
+            selfRef, field->getName().str(), loc);
+        FieldInit fi;
+        fi.name = field->getName().str();
+        fi.value = fieldAccess;
+        fi.loc = loc;
+        fieldInits.push_back(fi);
+      }
+      auto *structLit = ctx.create<StructLiteral>(
+          typeName, std::move(fieldInits), nullptr, loc);
+      auto *retStmt = ctx.create<ReturnStmt>(structLit, loc);
+      auto *body = ctx.create<CompoundStmt>(
+          std::vector<Stmt *>{retStmt}, nullptr, loc);
+
+      auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+      auto *selfRefType = ctx.create<RefType>(selfType, loc);
+      ParamDecl selfParam;
+      selfParam.name = "self";
+      selfParam.type = selfRefType;
+      selfParam.isSelfRef = true;
+      selfParam.loc = loc;
+      auto *retType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+
+      auto *cloneMethod = ctx.create<FunctionDecl>(
+          "clone", std::vector<GenericParam>{},
+          std::vector<ParamDecl>{selfParam},
+          retType, body, std::vector<WhereConstraint>{}, loc);
+
+      auto *targetType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+      auto *traitType = ctx.create<NamedType>("Clone", std::vector<Type *>{}, loc);
+      auto *implDecl = ctx.create<ImplDecl>(
+          std::vector<GenericParam>{}, targetType, traitType,
+          std::vector<FunctionDecl *>{cloneMethod}, loc);
+      syntheticImpls.push_back(implDecl);
+    }
+
+    // derive(PartialEq): fn eq(ref<Self>, other: ref<Type>): bool { return self.f1 == other.f1 && ...; }
+    if (hasPartialEq) {
+      Expr *comparison = nullptr;
+      for (auto *field : sd->getFields()) {
+        std::string fname = field->getName().str();
+        auto *selfRef = ctx.create<DeclRefExpr>("self", loc);
+        auto *selfField = ctx.create<FieldAccessExpr>(selfRef, fname, loc);
+        auto *otherRef = ctx.create<DeclRefExpr>("other", loc);
+        auto *otherField = ctx.create<FieldAccessExpr>(otherRef, fname, loc);
+        auto *fieldEq = ctx.create<BinaryExpr>(BinaryOp::Eq, selfField, otherField, loc);
+        if (!comparison) comparison = fieldEq;
+        else comparison = ctx.create<BinaryExpr>(BinaryOp::LogAnd, comparison, fieldEq, loc);
+      }
+      if (!comparison)
+        comparison = ctx.create<BoolLiteral>(true, loc);
+
+      auto *retStmt = ctx.create<ReturnStmt>(comparison, loc);
+      auto *body = ctx.create<CompoundStmt>(
+          std::vector<Stmt *>{retStmt}, nullptr, loc);
+
+      auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+      auto *selfRefType = ctx.create<RefType>(selfType, loc);
+      ParamDecl selfParam;
+      selfParam.name = "self";
+      selfParam.type = selfRefType;
+      selfParam.isSelfRef = true;
+      selfParam.loc = loc;
+
+      auto *otherNamedType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+      auto *otherRefType = ctx.create<RefType>(otherNamedType, loc);
+      ParamDecl otherParam;
+      otherParam.name = "other";
+      otherParam.type = otherRefType;
+      otherParam.loc = loc;
+
+      auto *boolType = ctx.getBuiltinType(BuiltinTypeKind::Bool);
+      auto *eqMethod = ctx.create<FunctionDecl>(
+          "eq", std::vector<GenericParam>{},
+          std::vector<ParamDecl>{selfParam, otherParam},
+          boolType, body, std::vector<WhereConstraint>{}, loc);
+
+      auto *targetType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+      auto *traitType = ctx.create<NamedType>("PartialEq", std::vector<Type *>{}, loc);
+      auto *implDecl = ctx.create<ImplDecl>(
+          std::vector<GenericParam>{}, targetType, traitType,
+          std::vector<FunctionDecl *>{eqMethod}, loc);
+      syntheticImpls.push_back(implDecl);
+    }
+  }
+
+  for (auto *impl : syntheticImpls)
+    items.push_back(impl);
+}
+
 void Sema::analyze(std::vector<Decl *> &items) {
+  // Synthesize impl blocks for @derive attributes before analysis.
+  synthesizeDeriveImpls(ctx, items);
+
   // First pass: register all type declarations and impl blocks.
   for (auto *item : items) {
     if (auto *sd = dynamic_cast<StructDecl *>(item))
