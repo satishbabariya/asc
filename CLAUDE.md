@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~81% RFC coverage. 188 lit tests at 100%. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~78% RFC coverage. 244 lit tests at 100%. 75 std library files (33,900+ LOC). Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -24,7 +24,7 @@ lib/
 │                  sync_rt.c, arc_rt.c, rc_rt.c, atomics.c, wasi_*.c (1227 LOC)
 ├── Driver/        Driver.cpp (700+ LOC) — CLI, pipeline orchestration, LSP, Wasm linking
 include/asc/       Headers for all modules
-test/              188 lit tests (e2e, integration, std, Lex, Parse, Sema)
+test/              244 lit tests (e2e, integration, std, Lex, Parse, Sema)
 rfcs/              20 accepted RFCs — source of truth for design
 docs/superpowers/  Design specs and implementation plans
 tools/asc/         main.cpp entry point
@@ -105,8 +105,8 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - **Result\<T,E\>**: Ok, Err, `?` operator desugaring
 - **File**: open, close, read, seek (wired to WASI fs)
 
-### Traits (20 registered with method signatures)
-Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default, Add, Sub, Mul, Div, Neg, Index, PartialOrd, Ord, Hash, From, Into, AsRef, AsMut, Deref, DerefMut
+### Traits (29 registered with method signatures)
+Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default, Add, Sub, Mul, Div, Neg, Index, IndexMut, PartialOrd, Ord, Hash, From, Into, AsRef, AsMut, Deref, DerefMut, IntoIterator, FromIterator
 
 ### Toolchain
 - `asc build` — full compile to .wasm/.o with auto-linking
@@ -132,23 +132,27 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 | RFC | Title | Coverage |
 |-----|-------|----------|
 | 0001 | Project Overview | **100%** |
-| 0002 | Surface Syntax | **100%** |
-| 0003 | Compiler Pipeline | **~95%** |
-| 0004 | Target Support | **~83%** |
-| 0005 | Ownership Model | **~70%** |
-| 0006 | Borrow Checker | **~75%** |
+| 0002 | Surface Syntax | **95%** |
+| 0003 | Compiler Pipeline | **95%** |
+| 0004 | Target Support | **83%** |
+| 0005 | Ownership Model | **80%** |
+| 0006 | Borrow Checker | **82%** |
 | 0007 | Concurrency | ~35% |
 | 0008 | Memory Model | ~40% |
 | 0009 | Panic/Unwind | ~45% |
-| 0010 | Toolchain/DX | **~95%** |
-| 0011 | Core Traits | **~93%** |
-| 0012 | Memory Module | ~60% |
-| 0013 | Collections/String | **~82%** |
-| 0014 | Concurrency/IO | ~72% |
-| 0015 | Complete Syntax | **~90%** |
-| 0016-0020 | JSON/Encoding/Path/Config/Async | 0-5% |
+| 0010 | Toolchain/DX | **88%** |
+| 0011 | Core Traits | **~90%** |
+| 0012 | Memory Module | **85%** |
+| 0013 | Collections/String | **~85%** |
+| 0014 | Concurrency/IO | **~88%** |
+| 0015 | Complete Syntax | **88%** |
+| 0016 | JSON | ~25% |
+| 0017 | Collections Utils | **~38%** |
+| 0018 | Encoding/Crypto | **~75%** |
+| 0019 | Path/Config | **~72%** |
+| 0020 | Async Utilities | ~20% |
 
-**Overall weighted: ~81%**
+**Overall weighted: ~80%**
 
 ## Known Gaps
 
@@ -158,7 +162,11 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 4. **MPMC channels** — only SPSC ring buffer
 5. **Constant folding** — uses arith.constant at HIR, no Flang-style ConstantExpr
 6. **Multi-module linking** — import/export parses but no cross-module IR resolution
-7. **RFCs 0016-0020** — JSON, encoding, path, config, async entirely unimplemented
+7. **RFC-0016 JSON** — derive(Serialize/Deserialize) requires unimplemented macro expansion
+8. **RFC-0020 Async** — async/await syntax not supported in compiler (RFC-0015 §21)
+9. **SHA-3** — Keccak sponge not implemented (SHA-2 family complete)
+10. **AtomicU64/AtomicUsize/AtomicPtr** — only AtomicI32/U32/I64/Bool in std
+11. **Scoped threads** — thread::scope API not implemented
 
 ## Testing
 
