@@ -638,6 +638,100 @@ ExitCode Driver::runLsp() {
         continue;
       }
 
+      // Handle textDocument/didChange — re-run check and publish diagnostics.
+      if (body.find("\"textDocument/didChange\"") != std::string::npos) {
+        std::string uri;
+        auto uriPos = body.find("\"uri\"");
+        if (uriPos != std::string::npos) {
+          auto start = body.find('"', uriPos + 5) + 1;
+          auto end = body.find('"', start);
+          if (start != std::string::npos && end != std::string::npos)
+            uri = body.substr(start, end - start);
+        }
+
+        // Extract changed text from contentChanges[0].text.
+        std::string newText;
+        auto textPos = body.find("\"text\"");
+        if (textPos != std::string::npos) {
+          auto start = body.find('"', textPos + 6) + 1;
+          // Find the closing quote (handle escaped quotes).
+          size_t pos = start;
+          while (pos < body.size()) {
+            if (body[pos] == '\\') { pos += 2; continue; }
+            if (body[pos] == '"') break;
+            pos++;
+          }
+          if (pos < body.size())
+            newText = body.substr(start, pos - start);
+        }
+
+        std::string filePath = uri;
+        if (filePath.starts_with("file://"))
+          filePath = filePath.substr(7);
+
+        std::string diagJson = "[]";
+        if (!filePath.empty() && !newText.empty()) {
+          lspSMPersist = std::make_unique<SourceManager>();
+          lspCtxPersist = std::make_unique<ASTContext>();
+          astItems.clear();
+
+          auto lspDiags = std::make_unique<DiagnosticEngine>(*lspSMPersist);
+          llvm::raw_null_ostream nullStream;
+          lspDiags->setOutputStream(nullStream);
+
+          auto fileID = lspSMPersist->createBuffer(filePath, newText);
+          if (fileID.isValid()) {
+            Lexer lexer(fileID, *lspSMPersist, *lspDiags);
+            Parser parser(lexer, *lspCtxPersist, *lspDiags);
+            auto decls = parser.parseProgram();
+            astItems = decls;
+
+            if (!decls.empty() && !lspDiags->hasErrors()) {
+              Sema sema(*lspCtxPersist, *lspDiags);
+              sema.analyze(decls);
+            }
+
+            const auto &diags_list = lspDiags->getDiagnostics();
+            if (!diags_list.empty()) {
+              diagJson = "[";
+              bool first = true;
+              for (const auto &d : diags_list) {
+                if (!first) diagJson += ",";
+                first = false;
+                auto lc = lspSMPersist->getLineAndColumn(d.location);
+                unsigned line = lc.line > 0 ? lc.line - 1 : 0;
+                unsigned col = lc.column > 0 ? lc.column - 1 : 0;
+                int severity = (d.severity == DiagnosticSeverity::Error) ? 1
+                             : (d.severity == DiagnosticSeverity::Warning) ? 2
+                             : 3;
+                std::string msg;
+                for (char c : d.message) {
+                  if (c == '"') msg += "\\\"";
+                  else if (c == '\\') msg += "\\\\";
+                  else msg += c;
+                }
+                diagJson += "{\"range\":{\"start\":{\"line\":" +
+                    std::to_string(line) + ",\"character\":" +
+                    std::to_string(col) + "},\"end\":{\"line\":" +
+                    std::to_string(line) + ",\"character\":" +
+                    std::to_string(col + 1) + "}},\"severity\":" +
+                    std::to_string(severity) + ",\"source\":\"asc\",\"message\":\"" +
+                    msg + "\"}";
+              }
+              diagJson += "]";
+            }
+          }
+        }
+
+        std::string notification =
+            R"({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics",)"
+            R"("params":{"uri":")" + uri + R"(","diagnostics":)" + diagJson + "}}";
+        llvm::outs() << "Content-Length: " << notification.size()
+                     << "\r\n\r\n" << notification;
+        llvm::outs().flush();
+        continue;
+      }
+
       // Handle textDocument/hover — return type info for symbol under cursor.
       if (body.find("\"textDocument/hover\"") != std::string::npos) {
         std::string reqId = "0";
@@ -1097,6 +1191,8 @@ ExitCode Driver::runCodeGen() {
   cgOpts.debugInfo = opts.debugInfo;
   cgOpts.outputFile = opts.outputFile;
   cgOpts.wasmFeatures = opts.wasmFeatures;
+  cgOpts.maxThreads = opts.maxThreads;
+  cgOpts.noPanicUnwind = opts.noPanicUnwind;
 
   // Default output file.
   if (cgOpts.outputFile.empty() && opts.emitKind == EmitKind::Wasm) {

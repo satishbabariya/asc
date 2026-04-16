@@ -145,6 +145,42 @@ trait Iterator {
   fn peekable(own<Self>): own<Peekable<Self>> {
     return Peekable { iter: self, peeked: Option::None };
   }
+
+  fn map<B>(own<Self>, f: (own<Item>) -> own<B>): own<Map<Self, B>> {
+    return Map { iter: self, f: f };
+  }
+
+  fn filter(own<Self>, predicate: (ref<Item>) -> bool): own<Filter<Self>> {
+    return Filter { iter: self, predicate: predicate };
+  }
+
+  fn take(own<Self>, n: usize): own<Take<Self>> {
+    return Take { iter: self, remaining: n };
+  }
+
+  fn skip(own<Self>, n: usize): own<Skip<Self>> {
+    return Skip { iter: self, remaining: n };
+  }
+
+  fn chain<U: Iterator>(own<Self>, other: own<U>): own<Chain<Self, U>> {
+    return Chain { a: self, b: other, a_done: false };
+  }
+
+  fn zip<U: Iterator>(own<Self>, other: own<U>): own<Zip<Self, U>> {
+    return Zip { a: self, b: other };
+  }
+
+  fn enumerate(own<Self>): own<Enumerate<Self>> {
+    return Enumerate { iter: self, count: 0 };
+  }
+
+  fn flat_map<B: Iterator, F>(own<Self>, f: F): own<FlatMap<Self, F, B>> {
+    return FlatMap { iter: self, f: f, inner: Option::None };
+  }
+
+  fn collect<C: FromIterator<Item>>(own<Self>): own<C> {
+    return C::from_iter(self);
+  }
 }
 
 /// Conversion into an Iterator.
@@ -314,6 +350,35 @@ impl<I: Iterator> Iterator for Peekable<I> {
     match self.peeked.take() {
       Option::Some(v) => { return Option::Some(v); },
       Option::None => { return self.iter.next(); },
+    }
+  }
+}
+
+/// Iterator that maps each element to an iterator and flattens.
+struct FlatMap<I: Iterator, F, B: Iterator> {
+  iter: own<I>,
+  f: F,
+  inner: Option<own<B>>,
+}
+
+impl<I: Iterator, F, B: Iterator> Iterator for FlatMap<I, F, B> {
+  type Item = B::Item;
+
+  fn next(refmut<Self>): Option<own<B::Item>> {
+    loop {
+      match self.inner {
+        Option::Some(ref mut inner) => {
+          match inner.next() {
+            Option::Some(v) => { return Option::Some(v); },
+            Option::None => { self.inner = Option::None; },
+          }
+        },
+        Option::None => {},
+      }
+      match self.iter.next() {
+        Option::Some(v) => { self.inner = Option::Some((self.f)(v)); },
+        Option::None => { return Option::None; },
+      }
     }
   }
 }

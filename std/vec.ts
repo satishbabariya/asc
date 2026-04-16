@@ -238,6 +238,13 @@ impl<T> Vec<T> {
 
   fn truncate(refmut<Self>, new_len: usize): void {
     if new_len >= self.len { return; }
+    let i: i32 = new_len as i32;
+    const elem_size = size_of!<T>();
+    while (i as usize) < self.len {
+      const slot = (self.ptr as usize + (i as usize) * elem_size) as *mut T;
+      unsafe { ptr_drop_in_place(slot); }
+      i = i + 1;
+    }
     self.len = new_len;
   }
 
@@ -339,5 +346,18 @@ impl<T> Iterator for VecIterMut<T> {
     const current = self.ptr;
     self.ptr = (self.ptr as usize + elem_size) as *mut T;
     return Option::Some(unsafe { &mut *current });
+  }
+}
+
+impl<T> FromIterator<T> for Vec<T> {
+  fn from_iter<I: Iterator>(iter: own<I>): own<Vec<T>> {
+    let v: Vec<T> = Vec::new();
+    loop {
+      match iter.next() {
+        Option::Some(item) => { v.push(item); },
+        Option::None => { break; },
+      }
+    }
+    return v;
   }
 }

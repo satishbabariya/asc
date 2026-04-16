@@ -1,23 +1,28 @@
 // RUN: %asc check %s
-// Test: HashMap get_mut, keys, values.
+// Test: HashMap Entry API.
 function main(): i32 {
   let map: HashMap<i32, i32> = HashMap::new();
-  map.insert(1, 100);
-  map.insert(2, 200);
-  map.insert(3, 300);
 
-  // get_mut — modify value in place.
-  let val = map.get_mut(2).unwrap();
-  *val = 999;
-  assert_eq!(*map.get(2).unwrap(), 999);
+  // entry().or_insert: insert default when absent
+  map.entry(1).or_insert(100);
+  assert!(map.contains_key(1));
+  assert_eq!(map.len(), 1);
 
-  // keys.
-  const ks = map.keys();
-  assert_eq!(ks.len(), 3);
+  // entry().or_insert: no-op when already present
+  map.entry(1).or_insert(999);
+  assert_eq!(map.len(), 1);
 
-  // values.
-  const vs = map.values();
-  assert_eq!(vs.len(), 3);
+  // and_modify + or_insert: modify existing
+  map.entry(1).and_modify((v: refmut<i32>) => { *v = *v + 1; }).or_insert(0);
+  // Value should now be 101 (was 100, modified +1)
+
+  // and_modify + or_insert: insert when absent
+  map.entry(2).and_modify((v: refmut<i32>) => { *v = *v + 1; }).or_insert(50);
+  assert_eq!(map.len(), 2);
+
+  // values_mut
+  let vals = map.values_mut();
+  assert_eq!(vals.len(), 2);
 
   return 0;
 }

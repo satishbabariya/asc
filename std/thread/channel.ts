@@ -231,6 +231,59 @@ impl<T: Send> Receiver<T> {
     if unsafe { (*h).closed } { return Result::Err(TryRecvError::Disconnected); }
     return Result::Err(TryRecvError::Empty);
   }
+
+  /// Receives a value from the channel with a timeout.
+  /// Returns Err(RecvTimeoutError::Timeout) if the deadline elapses.
+  /// Returns Err(RecvTimeoutError::Disconnected) if all senders are dropped.
+  fn recv_timeout(ref<Self>, timeout_ms: u64): Result<own<T>, RecvTimeoutError> {
+    const h = self.header;
+    const count_ptr = unsafe { &(*h).count as *const i32 as *mut i32 };
+
+    @extern("__asc_clock_monotonic")
+    const start_ns = clock_monotonic();
+    const deadline_ns = start_ns + timeout_ms * 1_000_000;
+
+    loop {
+      @extern("__atomic_load_n_i32")
+      const current_count = atomic_load(count_ptr, Ordering::Acquire);
+      if current_count > 0 {
+        const head_ptr = unsafe { &(*h).head as *const i32 as *mut i32 };
+        @extern("__atomic_fetch_add_i32")
+        const pos = atomic_fetch_add(head_ptr, 1, Ordering::AcqRel);
+        const idx = (pos as usize) % unsafe { (*h).capacity };
+        const elem_size = size_of!<T>();
+        const slot = (unsafe { (*h).buffer } as usize + idx * elem_size) as *const T;
+        const value = unsafe { ptr_read(slot) };
+        @extern("__atomic_fetch_sub_i32")
+        atomic_fetch_sub(count_ptr, 1, Ordering::Release);
+        @extern("memory.atomic.notify")
+        atomic_notify(count_ptr, 1);
+        return Result::Ok(value);
+      }
+
+      if unsafe { (*h).closed } {
+        return Result::Err(RecvTimeoutError::Disconnected);
+      }
+
+      @extern("__asc_clock_monotonic")
+      const now_ns = clock_monotonic();
+      if now_ns >= deadline_ns {
+        return Result::Err(RecvTimeoutError::Timeout);
+      }
+
+      const remaining_ns = deadline_ns - now_ns;
+      const remaining_ms = (remaining_ns / 1_000_000) as i64;
+      @extern("memory.atomic.wait32")
+      atomic_wait_i32(count_ptr, 0, remaining_ms);
+    }
+  }
+
+  /// Returns an iterator that yields values from the channel.
+  /// The iterator blocks on each call to next() and terminates when
+  /// the channel is closed and empty.
+  fn iter(ref<Self>): own<RecvIter<T>> {
+    return RecvIter { rx: self };
+  }
 }
 
 impl<T> Drop for Receiver<T> {
@@ -283,4 +336,23 @@ struct RecvError {}
 enum TryRecvError {
   Empty,
   Disconnected,
+}
+
+enum RecvTimeoutError {
+  Timeout,
+  Disconnected,
+}
+
+struct RecvIter<T> {
+  rx: ref<Receiver<T>>,
+}
+
+impl<T: Send> Iterator for RecvIter<T> {
+  type Item = T;
+  fn next(refmut<Self>): Option<own<T>> {
+    match self.rx.recv() {
+      Result::Ok(v) => { return Option::Some(v); },
+      Result::Err(_) => { return Option::None; },
+    }
+  }
 }

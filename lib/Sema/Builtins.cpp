@@ -472,6 +472,19 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Copy", std::move(sym));
   }
 
+  // Sized marker trait (no methods)
+  {
+    auto *sizedTrait = ctx.create<TraitDecl>(
+        "Sized", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{}, loc);
+    traitDecls["Sized"] = sizedTrait;
+    Symbol sym;
+    sym.name = "Sized";
+    sym.decl = sizedTrait;
+    scope->declare("Sized", std::move(sym));
+  }
+
   // Default trait: fn default(): Self
   {
     auto *defaultMethod = ctx.create<FunctionDecl>(
@@ -494,18 +507,18 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
 
   // --- Operator Traits ---
 
-  // Add trait: fn add(ref<Self>, ref<Self>): Self
+  // Add trait: fn add(own<Self>, own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
-    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
     ParamDecl selfParam;
     selfParam.name = "self";
-    selfParam.type = selfRef;
-    selfParam.isSelfRef = true;
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
     selfParam.loc = loc;
     ParamDecl rhsParam;
     rhsParam.name = "rhs";
-    rhsParam.type = ctx.create<RefType>(
+    rhsParam.type = ctx.create<OwnType>(
         ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
     rhsParam.loc = loc;
     auto *addMethod = ctx.create<FunctionDecl>(
@@ -526,18 +539,18 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Add", std::move(sym));
   }
 
-  // Sub trait: fn sub(ref<Self>, ref<Self>): Self
+  // Sub trait: fn sub(own<Self>, own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
-    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
     ParamDecl selfParam;
     selfParam.name = "self";
-    selfParam.type = selfRef;
-    selfParam.isSelfRef = true;
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
     selfParam.loc = loc;
     ParamDecl rhsParam;
     rhsParam.name = "rhs";
-    rhsParam.type = ctx.create<RefType>(
+    rhsParam.type = ctx.create<OwnType>(
         ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
     rhsParam.loc = loc;
     auto *subMethod = ctx.create<FunctionDecl>(
@@ -558,18 +571,18 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Sub", std::move(sym));
   }
 
-  // Mul trait: fn mul(ref<Self>, ref<Self>): Self
+  // Mul trait: fn mul(own<Self>, own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
-    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
     ParamDecl selfParam;
     selfParam.name = "self";
-    selfParam.type = selfRef;
-    selfParam.isSelfRef = true;
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
     selfParam.loc = loc;
     ParamDecl rhsParam;
     rhsParam.name = "rhs";
-    rhsParam.type = ctx.create<RefType>(
+    rhsParam.type = ctx.create<OwnType>(
         ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
     rhsParam.loc = loc;
     auto *mulMethod = ctx.create<FunctionDecl>(
@@ -590,18 +603,18 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Mul", std::move(sym));
   }
 
-  // Div trait: fn div(ref<Self>, ref<Self>): Self
+  // Div trait: fn div(own<Self>, own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
-    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
     ParamDecl selfParam;
     selfParam.name = "self";
-    selfParam.type = selfRef;
-    selfParam.isSelfRef = true;
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
     selfParam.loc = loc;
     ParamDecl rhsParam;
     rhsParam.name = "rhs";
-    rhsParam.type = ctx.create<RefType>(
+    rhsParam.type = ctx.create<OwnType>(
         ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
     rhsParam.loc = loc;
     auto *divMethod = ctx.create<FunctionDecl>(
@@ -622,14 +635,14 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Div", std::move(sym));
   }
 
-  // Neg trait: fn neg(ref<Self>): Self
+  // Neg trait: fn neg(own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
-    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
     ParamDecl selfParam;
     selfParam.name = "self";
-    selfParam.type = selfRef;
-    selfParam.isSelfRef = true;
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
     selfParam.loc = loc;
     auto *negMethod = ctx.create<FunctionDecl>(
         "neg", std::vector<GenericParam>{},

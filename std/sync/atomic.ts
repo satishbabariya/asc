@@ -255,6 +255,131 @@ impl AtomicI64 {
   }
 }
 
+// ---------- AtomicU64 ----------
+
+/// Atomic 64-bit unsigned integer. NOT @copy.
+struct AtomicU64 {
+  value: u64,
+}
+
+impl AtomicU64 {
+  fn new(v: u64): AtomicU64 { return AtomicU64 { value: v }; }
+
+  fn load(ref<Self>, order: Ordering): u64 {
+    @extern("i64.atomic.load")
+    return atomic_load_u64(&self.value, order);
+  }
+
+  fn store(ref<Self>, v: u64, order: Ordering): void {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.store")
+    atomic_store_u64(ptr, v, order);
+  }
+
+  fn swap(ref<Self>, v: u64, order: Ordering): u64 {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.xchg")
+    return atomic_swap_u64(ptr, v, order);
+  }
+
+  fn fetch_add(ref<Self>, v: u64, order: Ordering): u64 {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.add")
+    return atomic_fetch_add_u64(ptr, v, order);
+  }
+
+  fn fetch_sub(ref<Self>, v: u64, order: Ordering): u64 {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.sub")
+    return atomic_fetch_sub_u64(ptr, v, order);
+  }
+
+  fn fetch_and(ref<Self>, v: u64, order: Ordering): u64 {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.and")
+    return atomic_fetch_and_u64(ptr, v, order);
+  }
+
+  fn fetch_or(ref<Self>, v: u64, order: Ordering): u64 {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.or")
+    return atomic_fetch_or_u64(ptr, v, order);
+  }
+
+  fn fetch_xor(ref<Self>, v: u64, order: Ordering): u64 {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.xor")
+    return atomic_fetch_xor_u64(ptr, v, order);
+  }
+
+  fn compare_exchange(ref<Self>, expected: u64, new_val: u64,
+    success: Ordering, failure: Ordering): Result<u64, u64> {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.cmpxchg")
+    return atomic_compare_exchange_u64(ptr, expected, new_val, success, failure);
+  }
+
+  fn compare_exchange_weak(ref<Self>, expected: u64, new_val: u64,
+    success: Ordering, failure: Ordering): Result<u64, u64> {
+    return self.compare_exchange(expected, new_val, success, failure);
+  }
+}
+
+// ---------- AtomicUsize ----------
+
+/// Atomic pointer-sized unsigned integer. Backed by u64 storage. NOT @copy.
+struct AtomicUsize {
+  value: u64,
+}
+
+impl AtomicUsize {
+  fn new(v: usize): AtomicUsize { return AtomicUsize { value: v as u64 }; }
+
+  fn load(ref<Self>, order: Ordering): usize {
+    @extern("i64.atomic.load")
+    const raw = atomic_load_u64(&self.value, order);
+    return raw as usize;
+  }
+
+  fn store(ref<Self>, v: usize, order: Ordering): void {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.store")
+    atomic_store_u64(ptr, v as u64, order);
+  }
+
+  fn swap(ref<Self>, v: usize, order: Ordering): usize {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.xchg")
+    const old = atomic_swap_u64(ptr, v as u64, order);
+    return old as usize;
+  }
+
+  fn fetch_add(ref<Self>, v: usize, order: Ordering): usize {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.add")
+    const old = atomic_fetch_add_u64(ptr, v as u64, order);
+    return old as usize;
+  }
+
+  fn fetch_sub(ref<Self>, v: usize, order: Ordering): usize {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.sub")
+    const old = atomic_fetch_sub_u64(ptr, v as u64, order);
+    return old as usize;
+  }
+
+  fn compare_exchange(ref<Self>, expected: usize, new_val: usize,
+    success: Ordering, failure: Ordering): Result<usize, usize> {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.cmpxchg")
+    const result = atomic_compare_exchange_u64(ptr, expected as u64, new_val as u64, success, failure);
+    match result {
+      Result::Ok(old) => { return Result::Ok(old as usize); },
+      Result::Err(actual) => { return Result::Err(actual as usize); },
+    }
+  }
+}
+
 // ---------- AtomicBool ----------
 
 /// Atomic boolean. NOT @copy.

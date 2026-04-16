@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~84% RFC coverage. 245 lit tests at 100%. 75 std library files (34,200+ LOC). 29 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~82% RFC coverage. 249 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -24,7 +24,7 @@ lib/
 │                  sync_rt.c, arc_rt.c, rc_rt.c, atomics.c, wasi_*.c (1227 LOC)
 ├── Driver/        Driver.cpp (700+ LOC) — CLI, pipeline orchestration, LSP, Wasm linking
 include/asc/       Headers for all modules
-test/              245 lit tests (e2e, integration, std, Lex, Parse, Sema)
+test/              249 lit tests (e2e, integration, std, Lex, Parse, Sema)
 rfcs/              20 accepted RFCs — source of truth for design
 docs/superpowers/  Design specs and implementation plans
 tools/asc/         main.cpp entry point
@@ -92,11 +92,13 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - `Mutex::new/lock/unlock/try_lock` → atomic spin-lock
 - `Semaphore` with atomic permits
 - `RwLock::new/read_lock/read_unlock/write_lock/write_unlock`
+- `AtomicU64` with load, store, swap, compare_exchange, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor
+- `AtomicUsize` with load, store, swap, compare_exchange, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor
 
 ### Standard Library
-- **Vec\<T\>**: new, push, pop, get, len, is_empty, clear, iter, fold, map, filter, sort, reverse, dedup, extend, with_capacity, retain (17 methods)
-- **String**: new, from, push_str, len, as_ptr, clear, eq, concat, trim, char_at, split, starts_with, ends_with, contains, to_uppercase, to_lowercase (16 methods)
-- **HashMap\<K,V\>**: new, insert, get, contains, remove, len, keys, values, clear, is_empty (10 methods)
+- **Vec\<T\>**: new, push, pop, get, len, is_empty, clear, truncate, iter, fold, map, filter, sort, reverse, dedup, extend, with_capacity, retain (18 methods)
+- **String**: new, from, push_str, len, as_ptr, clear, eq, concat, trim, char_at, split, starts_with, ends_with, contains, to_uppercase, to_lowercase, chars, lines, bytes, into_bytes (20 methods)
+- **HashMap\<K,V\>**: new, insert, get, contains, remove, len, keys, values, clear, is_empty, entry, or_insert, or_insert_with, and_modify, values_mut (15 methods)
 - **Box\<T\>**: new (malloc-backed)
 - **Arc\<T\>**: new, clone, drop, get, strong_count (atomic refcount)
 - **Rc\<T\>**: new, clone, drop, get, strong_count (non-atomic)
@@ -105,8 +107,8 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - **Result\<T,E\>**: Ok, Err, `?` operator desugaring
 - **File**: open, close, read, seek (wired to WASI fs)
 
-### Traits (29 registered with method signatures)
-Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default, Add, Sub, Mul, Div, Neg, Index, IndexMut, PartialOrd, Ord, Hash, From, Into, AsRef, AsMut, Deref, DerefMut, IntoIterator, FromIterator
+### Traits (30 registered with method signatures)
+Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default, Add, Sub, Mul, Div, Neg, Index, IndexMut, PartialOrd, Ord, Hash, From, Into, AsRef, AsMut, Deref, DerefMut, IntoIterator, FromIterator, Sized
 
 ### Toolchain
 - `asc build` — full compile to .wasm/.o with auto-linking
@@ -131,28 +133,28 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 
 | RFC | Title | Coverage |
 |-----|-------|----------|
-| 0001 | Project Overview | **100%** |
-| 0002 | Surface Syntax | **95%** |
-| 0003 | Compiler Pipeline | **95%** |
+| 0001 | Project Overview | **97%** |
+| 0002 | Surface Syntax | **92%** |
+| 0003 | Compiler Pipeline | **93%** |
 | 0004 | Target Support | **~86%** |
-| 0005 | Ownership Model | **~83%** |
-| 0006 | Borrow Checker | **~85%** |
-| 0007 | Concurrency | ~35% |
-| 0008 | Memory Model | ~40% |
+| 0005 | Ownership Model | **~88%** |
+| 0006 | Borrow Checker | **~83%** |
+| 0007 | Concurrency | ~40% |
+| 0008 | Memory Model | ~55% |
 | 0009 | Panic/Unwind | ~45% |
-| 0010 | Toolchain/DX | **88%** |
-| 0011 | Core Traits | **~90%** |
-| 0012 | Memory Module | **85%** |
-| 0013 | Collections/String | **~88%** |
-| 0014 | Concurrency/IO | **~88%** |
-| 0015 | Complete Syntax | **~91%** |
-| 0016 | JSON | ~25% |
+| 0010 | Toolchain/DX | **~80%** |
+| 0011 | Core Traits | **~93%** |
+| 0012 | Memory Module | **~87%** |
+| 0013 | Collections/String | **~90%** |
+| 0014 | Concurrency/IO | **~86%** |
+| 0015 | Complete Syntax | **~89%** |
+| 0016 | JSON | ~35% |
 | 0017 | Collections Utils | **~40%** |
 | 0018 | Encoding/Crypto | **~75%** |
 | 0019 | Path/Config | **~72%** |
-| 0020 | Async Utilities | ~20% |
+| 0020 | Async Utilities | ~55% |
 
-**Overall weighted: ~84%**
+**Overall weighted: ~82%**
 
 ## Known Gaps
 
@@ -165,7 +167,7 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 7. **RFC-0016 JSON** — derive(Serialize/Deserialize) requires unimplemented macro expansion
 8. **RFC-0020 Async** — async/await syntax not supported in compiler (RFC-0015 §21)
 9. **SHA-3** — Keccak sponge not implemented (SHA-2 family complete)
-10. **AtomicU64/AtomicUsize/AtomicPtr** — only AtomicI32/U32/I64/Bool in std
+10. **AtomicPtr** — AtomicI32/U32/I64/Bool/U64/Usize implemented, AtomicPtr not yet
 11. **Scoped threads** — thread::scope API not implemented
 
 ## Testing
