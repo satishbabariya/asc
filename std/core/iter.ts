@@ -145,6 +145,34 @@ trait Iterator {
   fn peekable(own<Self>): own<Peekable<Self>> {
     return Peekable { iter: self, peeked: Option::None };
   }
+
+  fn map<B>(own<Self>, f: (own<Item>) -> own<B>): own<Map<Self, B>> {
+    return Map { iter: self, f: f };
+  }
+
+  fn filter(own<Self>, predicate: (ref<Item>) -> bool): own<Filter<Self>> {
+    return Filter { iter: self, predicate: predicate };
+  }
+
+  fn take(own<Self>, n: usize): own<Take<Self>> {
+    return Take { iter: self, remaining: n };
+  }
+
+  fn skip(own<Self>, n: usize): own<Skip<Self>> {
+    return Skip { iter: self, remaining: n };
+  }
+
+  fn chain<U: Iterator>(own<Self>, other: own<U>): own<Chain<Self, U>> {
+    return Chain { a: self, b: other, a_done: false };
+  }
+
+  fn zip<U: Iterator>(own<Self>, other: own<U>): own<Zip<Self, U>> {
+    return Zip { a: self, b: other };
+  }
+
+  fn enumerate(own<Self>): own<Enumerate<Self>> {
+    return Enumerate { iter: self, count: 0 };
+  }
 }
 
 /// Conversion into an Iterator.
