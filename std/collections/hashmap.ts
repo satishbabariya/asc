@@ -176,10 +176,97 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
     }
     self.len = 0;
   }
+
+  fn entry(refmut<Self>, key: own<K>): Entry<K, V> {
+    const hash = self.hash_key(&key);
+    const cap = self.buckets.len();
+    let idx = (hash as usize) % cap;
+
+    let i: usize = 0;
+    while i < cap {
+      const bucket_idx = (idx + i) % cap;
+      const bucket = self.buckets.get(bucket_idx).unwrap();
+      if !bucket.occupied {
+        return Entry::Vacant(VacantEntry { map: self, key: key, hash: hash });
+      }
+      if bucket.hash == hash && bucket.key.eq(&key) {
+        return Entry::Occupied(OccupiedEntry { map: self, bucket_idx: bucket_idx });
+      }
+      i = i + 1;
+    }
+    return Entry::Vacant(VacantEntry { map: self, key: key, hash: hash });
+  }
+
+  fn values_mut(refmut<Self>): own<Vec<refmut<V>>> {
+    let result: Vec<refmut<V>> = Vec::new();
+    let i: usize = 0;
+    while i < self.buckets.len() {
+      const bucket = self.buckets.get_mut(i).unwrap();
+      if bucket.occupied {
+        result.push(&mut bucket.value);
+      }
+      i = i + 1;
+    }
+    return result;
+  }
 }
 
 impl<K: Hash + Eq, V> Drop for HashMap<K, V> {
   fn drop(refmut<Self>): void {
     self.clear();
+  }
+}
+
+// ---------- Entry API ----------
+
+enum Entry<K, V> {
+  Occupied(OccupiedEntry<K, V>),
+  Vacant(VacantEntry<K, V>),
+}
+
+struct OccupiedEntry<K, V> {
+  map: refmut<HashMap<K, V>>,
+  bucket_idx: usize,
+}
+
+struct VacantEntry<K, V> {
+  map: refmut<HashMap<K, V>>,
+  key: own<K>,
+  hash: u64,
+}
+
+impl<K: Hash + Eq, V> Entry<K, V> {
+  /// Insert a default value if vacant, return mutable ref to the value.
+  fn or_insert(own<Self>, default: own<V>): void {
+    match self {
+      Entry::Occupied(_) => {
+        // Already present, do nothing (can't return refmut easily).
+      },
+      Entry::Vacant(e) => {
+        e.map.insert(e.key, default);
+      },
+    }
+  }
+
+  /// Insert value from closure if vacant.
+  fn or_insert_with(own<Self>, f: () -> own<V>): void {
+    match self {
+      Entry::Occupied(_) => {},
+      Entry::Vacant(e) => {
+        e.map.insert(e.key, f());
+      },
+    }
+  }
+
+  /// Modify the value if occupied, then return self for chaining.
+  fn and_modify(own<Self>, f: (refmut<V>) -> void): Entry<K, V> {
+    match self {
+      Entry::Occupied(ref e) => {
+        const bucket = e.map.buckets.get_mut(e.bucket_idx).unwrap();
+        f(&mut bucket.value);
+        return self;
+      },
+      Entry::Vacant(_) => { return self; },
+    }
   }
 }
