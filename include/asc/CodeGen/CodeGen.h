@@ -47,6 +47,12 @@ struct CodeGenOptions {
 
   /// Wasm target features override (e.g. "+bulk-memory,+mutable-globals").
   std::string wasmFeatures;
+
+  /// Max threads for arena sizing (default: 4). From --max-threads.
+  unsigned maxThreads = 4;
+
+  /// Trap on panic instead of setjmp/longjmp unwind. From --no-panic-unwind.
+  bool noPanicUnwind = false;
 };
 
 /// Code generator — final stage of the compiler pipeline.

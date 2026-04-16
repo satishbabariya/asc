@@ -1097,6 +1097,8 @@ ExitCode Driver::runCodeGen() {
   cgOpts.debugInfo = opts.debugInfo;
   cgOpts.outputFile = opts.outputFile;
   cgOpts.wasmFeatures = opts.wasmFeatures;
+  cgOpts.maxThreads = opts.maxThreads;
+  cgOpts.noPanicUnwind = opts.noPanicUnwind;
 
   // Default output file.
   if (cgOpts.outputFile.empty() && opts.emitKind == EmitKind::Wasm) {
