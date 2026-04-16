@@ -123,6 +123,50 @@ impl<K: Hash + Eq, V> HashMap<K, V> {
     return Option::None;
   }
 
+  fn get_mut(refmut<Self>, key: ref<K>): Option<refmut<V>> {
+    const hash = self.hash_key(key);
+    const cap = self.buckets.len();
+    let idx = (hash as usize) % cap;
+
+    let i: usize = 0;
+    while i < cap {
+      const bucket_idx = (idx + i) % cap;
+      const bucket = self.buckets.get_mut(bucket_idx).unwrap();
+      if !bucket.occupied { return Option::None; }
+      if bucket.hash == hash && bucket.key.eq(key) {
+        return Option::Some(&mut bucket.value);
+      }
+      i = i + 1;
+    }
+    return Option::None;
+  }
+
+  fn keys(ref<Self>): own<Vec<ref<K>>> {
+    let result: Vec<ref<K>> = Vec::new();
+    let i: usize = 0;
+    while i < self.buckets.len() {
+      const bucket = self.buckets.get(i).unwrap();
+      if bucket.occupied {
+        result.push(&bucket.key);
+      }
+      i = i + 1;
+    }
+    return result;
+  }
+
+  fn values(ref<Self>): own<Vec<ref<V>>> {
+    let result: Vec<ref<V>> = Vec::new();
+    let i: usize = 0;
+    while i < self.buckets.len() {
+      const bucket = self.buckets.get(i).unwrap();
+      if bucket.occupied {
+        result.push(&bucket.value);
+      }
+      i = i + 1;
+    }
+    return result;
+  }
+
   fn clear(refmut<Self>): void {
     let i: usize = 0;
     while i < self.buckets.len() {
