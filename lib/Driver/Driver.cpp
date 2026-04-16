@@ -110,6 +110,10 @@ ExitCode Driver::parseArgs(int argc, char **argv) {
       opts.outputFile = argv[++i];
     } else if (arg == "--wasm-features" && i + 1 < argc) {
       opts.wasmFeatures = argv[++i];
+    } else if (arg == "--max-threads" && i + 1 < argc) {
+      opts.maxThreads = std::stoul(std::string(argv[++i]));
+    } else if (arg == "--no-panic-unwind") {
+      opts.noPanicUnwind = true;
     } else if (arg.starts_with("-")) {
       llvm::errs() << "error: unknown option '" << arg << "'\n";
       return ExitCode::UsageError;
@@ -1140,6 +1144,8 @@ void Driver::printUsage(llvm::raw_ostream &os) {
   os << "  --debug                 Emit debug info\n";
   os << "  --error-format <fmt>    human|json|github-actions\n";
   os << "  --wasm-features <list>  Wasm target features (e.g. +bulk-memory,+sign-ext)\n";
+  os << "  --max-threads <N>       Max threads for arena sizing (default: 4)\n";
+  os << "  --no-panic-unwind       Trap on panic instead of setjmp/longjmp unwind\n";
   os << "  --verbose               Print pipeline timings\n";
   os << "  -o <file>               Output file\n";
 }
