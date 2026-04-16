@@ -245,3 +245,310 @@ function interleave<T>(a: own<Vec<T>>, b: own<Vec<T>>): own<Vec<T>> {
   free(b.ptr);
   return result;
 }
+
+/// Binary search for partition point — first index where predicate is true. O(log n).
+function partition_point<T>(items: ref<Vec<T>>, pred: (ref<T>) -> bool): i32 {
+  let lo: i32 = 0;
+  let hi: i32 = items.len() as i32;
+  while lo < hi {
+    const mid = lo + (hi - lo) / 2;
+    if pred(items.get(mid as usize).unwrap()) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
+/// Elements in either a or b, deduped, preserving order. O(n*m).
+function union<T: PartialEq>(a: ref<Vec<T>>, b: ref<Vec<T>>): own<Vec<ref<T>>> {
+  let result: Vec<ref<T>> = Vec::new();
+  let i: i32 = 0;
+  while (i as usize) < a.len() {
+    result.push(a.get(i as usize).unwrap());
+    i = i + 1;
+  }
+  i = 0;
+  while (i as usize) < b.len() {
+    const elem = b.get(i as usize).unwrap();
+    let found = false;
+    let j: i32 = 0;
+    while (j as usize) < a.len() {
+      if a.get(j as usize).unwrap().eq(elem) { found = true; break; }
+      j = j + 1;
+    }
+    if !found { result.push(elem); }
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Zip with a combining function. Returns Vec<C>.
+function zip_with<A, B, C>(
+  a: ref<Vec<A>>, b: ref<Vec<B>>,
+  f: (ref<A>, ref<B>) -> own<C>
+): own<Vec<C>> {
+  let result: Vec<C> = Vec::new();
+  let len = if a.len() < b.len() { a.len() } else { b.len() };
+  let i: i32 = 0;
+  while (i as usize) < len {
+    result.push(f(a.get(i as usize).unwrap(), b.get(i as usize).unwrap()));
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Unzip a Vec of pairs into two Vecs.
+function unzip<A, B>(pairs: own<Vec<(A, B)>>): (own<Vec<A>>, own<Vec<B>>) {
+  let as_vec: Vec<A> = Vec::new();
+  let bs_vec: Vec<B> = Vec::new();
+  let i: i32 = 0;
+  while (i as usize) < pairs.len() {
+    const pair = pairs.get(i as usize).unwrap();
+    as_vec.push(pair.0);
+    bs_vec.push(pair.1);
+    i = i + 1;
+  }
+  return (as_vec, bs_vec);
+}
+
+/// Cumulative sums. [1,2,3] -> [1,3,6].
+function scan_sum(items: ref<Vec<i32>>): own<Vec<i32>> {
+  let result: Vec<i32> = Vec::new();
+  let acc: i32 = 0;
+  let i: i32 = 0;
+  while (i as usize) < items.len() {
+    acc = acc + *items.get(i as usize).unwrap();
+    result.push(acc);
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Sort a Vec in-place by key function. Insertion sort.
+function sort_by_key<T>(vec: refmut<Vec<T>>, key_fn: (ref<T>) -> i32): void {
+  let i: i32 = 1;
+  while (i as usize) < vec.len() {
+    let j = i;
+    while j > 0 {
+      const key_j = key_fn(vec.get(j as usize).unwrap());
+      const key_prev = key_fn(vec.get((j - 1) as usize).unwrap());
+      if key_j < key_prev {
+        // Swap using raw pointer arithmetic (no Vec::swap method)
+        const elem_size = size_of!<T>();
+        let ptr_j = (vec.ptr as usize + (j as usize) * elem_size) as *mut u8;
+        let ptr_prev = (vec.ptr as usize + ((j - 1) as usize) * elem_size) as *mut u8;
+        let tmp = alloca(elem_size) as *mut u8;
+        memcpy(tmp, ptr_j, elem_size);
+        memcpy(ptr_j, ptr_prev, elem_size);
+        memcpy(ptr_prev, tmp, elem_size);
+        j = j - 1;
+      } else {
+        break;
+      }
+    }
+    i = i + 1;
+  }
+}
+
+/// Return the n smallest elements. O(n * k) selection.
+function smallest<T: Ord>(items: ref<Vec<T>>, n: usize): own<Vec<ref<T>>> {
+  let result: Vec<ref<T>> = Vec::new();
+  let used: Vec<bool> = Vec::new();
+  let i: i32 = 0;
+  while (i as usize) < items.len() {
+    used.push(false);
+    i = i + 1;
+  }
+  let taken: i32 = 0;
+  while (taken as usize) < n && (taken as usize) < items.len() {
+    let min_idx: i32 = -1;
+    let j: i32 = 0;
+    while (j as usize) < items.len() {
+      if !*used.get(j as usize).unwrap() {
+        if min_idx == -1 {
+          min_idx = j;
+        } else {
+          match items.get(j as usize).unwrap().cmp(items.get(min_idx as usize).unwrap()) {
+            Ordering::Less => { min_idx = j; },
+            _ => {},
+          }
+        }
+      }
+      j = j + 1;
+    }
+    if min_idx >= 0 {
+      result.push(items.get(min_idx as usize).unwrap());
+      *used.get_mut(min_idx as usize).unwrap() = true;
+    }
+    taken = taken + 1;
+  }
+  return result;
+}
+
+/// Return the n largest elements. O(n * k) selection.
+function largest<T: Ord>(items: ref<Vec<T>>, n: usize): own<Vec<ref<T>>> {
+  let result: Vec<ref<T>> = Vec::new();
+  let used: Vec<bool> = Vec::new();
+  let i: i32 = 0;
+  while (i as usize) < items.len() {
+    used.push(false);
+    i = i + 1;
+  }
+  let taken: i32 = 0;
+  while (taken as usize) < n && (taken as usize) < items.len() {
+    let max_idx: i32 = -1;
+    let j: i32 = 0;
+    while (j as usize) < items.len() {
+      if !*used.get(j as usize).unwrap() {
+        if max_idx == -1 {
+          max_idx = j;
+        } else {
+          match items.get(j as usize).unwrap().cmp(items.get(max_idx as usize).unwrap()) {
+            Ordering::Greater => { max_idx = j; },
+            _ => {},
+          }
+        }
+      }
+      j = j + 1;
+    }
+    if max_idx >= 0 {
+      result.push(items.get(max_idx as usize).unwrap());
+      *used.get_mut(max_idx as usize).unwrap() = true;
+    }
+    taken = taken + 1;
+  }
+  return result;
+}
+
+/// Count occurrences of each element.
+function frequencies<T: Hash + Eq>(items: ref<Vec<T>>): own<HashMap<T, i32>> {
+  let map: HashMap<T, i32> = HashMap::new();
+  let i: i32 = 0;
+  while (i as usize) < items.len() {
+    const item = items.get(i as usize).unwrap();
+    if map.contains_key(item) {
+      const count = *map.get(item).unwrap();
+      map.insert(*item, count + 1);
+    } else {
+      map.insert(*item, 1);
+    }
+    i = i + 1;
+  }
+  return map;
+}
+
+/// Invert a map: swap keys and values.
+function invert<K: Hash + Eq, V: Hash + Eq>(map: own<HashMap<K, V>>): own<HashMap<V, K>> {
+  let result: HashMap<V, K> = HashMap::new();
+  let keys = map.keys();
+  let i: i32 = 0;
+  while (i as usize) < keys.len() {
+    const k = keys.get(i as usize).unwrap();
+    const v = map.get(k).unwrap();
+    result.insert(*v, **k);
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Filter map entries by key predicate.
+function filter_keys<K: Hash + Eq, V>(
+  map: ref<HashMap<K, V>>, pred: (ref<K>) -> bool
+): own<HashMap<K, V>> {
+  let result: HashMap<K, V> = HashMap::new();
+  let keys = map.keys();
+  let i: i32 = 0;
+  while (i as usize) < keys.len() {
+    const k = keys.get(i as usize).unwrap();
+    if pred(k) {
+      const v = map.get(k).unwrap();
+      result.insert(**k, *v);
+    }
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Transform map values, keeping keys.
+function map_values<K: Hash + Eq, V, U>(
+  map: own<HashMap<K, V>>, f: (ref<V>) -> own<U>
+): own<HashMap<K, U>> {
+  let result: HashMap<K, U> = HashMap::new();
+  let keys = map.keys();
+  let i: i32 = 0;
+  while (i as usize) < keys.len() {
+    const k = keys.get(i as usize).unwrap();
+    const v = map.get(k).unwrap();
+    result.insert(**k, f(v));
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Merge two maps. On collision, f resolves.
+function merge_with<K: Hash + Eq, V>(
+  a: own<HashMap<K, V>>, b: own<HashMap<K, V>>,
+  f: (ref<V>, ref<V>) -> own<V>
+): own<HashMap<K, V>> {
+  let result: HashMap<K, V> = HashMap::new();
+  let a_keys = a.keys();
+  let i: i32 = 0;
+  while (i as usize) < a_keys.len() {
+    const k = a_keys.get(i as usize).unwrap();
+    const v = a.get(k).unwrap();
+    result.insert(**k, *v);
+    i = i + 1;
+  }
+  let b_keys = b.keys();
+  i = 0;
+  while (i as usize) < b_keys.len() {
+    const k = b_keys.get(i as usize).unwrap();
+    const v_b = b.get(k).unwrap();
+    if result.contains_key(k) {
+      const v_a = result.get(k).unwrap();
+      const merged = f(v_a, v_b);
+      result.insert(**k, merged);
+    } else {
+      result.insert(**k, *v_b);
+    }
+    i = i + 1;
+  }
+  return result;
+}
+
+/// Group elements by key function.
+function group_by<T, K: Hash + Eq>(
+  items: ref<Vec<T>>, key_fn: (ref<T>) -> own<K>
+): own<HashMap<K, Vec<T>>> {
+  let map: HashMap<K, Vec<T>> = HashMap::new();
+  let i: i32 = 0;
+  while (i as usize) < items.len() {
+    const item = items.get(i as usize).unwrap();
+    const key = key_fn(item);
+    if !map.contains_key(&key) {
+      map.insert(key, Vec::new());
+    }
+    let group = map.get_mut(&key).unwrap();
+    group.push(*item);
+    i = i + 1;
+  }
+  return map;
+}
+
+/// Split string into owned Vec<String>.
+function split_collect(s: ref<str>, sep: ref<str>): own<Vec<String>> {
+  let result: Vec<String> = Vec::new();
+  let str_obj = String::new();
+  str_obj.push_str(s);
+  let parts = str_obj.split(sep);
+  let i: i32 = 0;
+  while (i as usize) < parts.len() {
+    let part_str = String::new();
+    part_str.push_str(*parts.get(i as usize).unwrap());
+    result.push(part_str);
+    i = i + 1;
+  }
+  return result;
+}

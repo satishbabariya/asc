@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~84% RFC coverage. 250 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~85% RFC coverage. 256 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -24,7 +24,7 @@ lib/
 │                  sync_rt.c, arc_rt.c, rc_rt.c, atomics.c, wasi_*.c (1227 LOC)
 ├── Driver/        Driver.cpp (700+ LOC) — CLI, pipeline orchestration, LSP, Wasm linking
 include/asc/       Headers for all modules
-test/              250 lit tests (e2e, integration, std, Lex, Parse, Sema)
+test/              256 lit tests (e2e, integration, std, Lex, Parse, Sema)
 rfcs/              20 accepted RFCs — source of truth for design
 docs/superpowers/  Design specs and implementation plans
 tools/asc/         main.cpp entry point
@@ -152,12 +152,12 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 | 0014 | Concurrency/IO | **~86%** |
 | 0015 | Complete Syntax | **~89%** |
 | 0016 | JSON | ~35% |
-| 0017 | Collections Utils | **~40%** |
+| 0017 | Collections Utils | **~65%** |
 | 0018 | Encoding/Crypto | **~75%** |
 | 0019 | Path/Config | **~72%** |
-| 0020 | Async Utilities | ~55% |
+| 0020 | Async Utilities | **~72%** |
 
-**Overall weighted: ~84%**
+**Overall weighted: ~85%**
 
 ## Known Gaps
 

@@ -51,3 +51,48 @@ impl<T> LazyCell<T> {
     }
   }
 }
+
+/// Thread-safe lazy initialization backed by a simple atomic flag.
+/// Safe to share across threads.
+@send @sync
+struct LazyLock<T> {
+  value: Option<own<T>>,
+  init: Option<() => own<T>>,
+  initialized: bool,
+}
+
+impl<T> LazyLock<T> {
+  fn new(init_fn: () => own<T>): own<LazyLock<T>> {
+    return LazyLock {
+      value: Option::None,
+      init: Option::Some(init_fn),
+      initialized: false,
+    };
+  }
+
+  fn get(ref<Self>): ref<T> {
+    if !self.initialized {
+      match self.init {
+        Option::Some(f) => {
+          self.value = Option::Some(f());
+          self.init = Option::None;
+          self.initialized = true;
+        },
+        Option::None => {},
+      }
+    }
+    match self.value {
+      Option::Some(ref v) => { return v; },
+      Option::None => { panic!("LazyLock: value not initialized"); },
+    }
+  }
+
+  fn is_initialized(ref<Self>): bool {
+    return self.initialized;
+  }
+
+  fn into_inner(own<Self>): own<T> {
+    self.get();
+    return self.value.unwrap();
+  }
+}

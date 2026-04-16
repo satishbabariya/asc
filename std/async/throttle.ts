@@ -77,6 +77,18 @@ impl RateLimiter {
     self.permits.store(self.max_permits);
     self.last_refill_ms.store(current_time_ms());
   }
+
+  /// Try to consume n tokens at once. Returns false if not enough.
+  fn try_acquire_n(ref<Self>, n: u32): bool {
+    self.try_refill();
+    let current = self.permits.load();
+    if current >= n {
+      if self.permits.compare_exchange(current, current - n) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
 
 // --- Runtime-provided timer function ---
