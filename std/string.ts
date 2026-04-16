@@ -219,6 +219,37 @@ impl String {
     return unsafe { slice::from_raw_parts(self.ptr as *const u8, self.len) };
   }
 
+  fn bytes(ref<Self>): own<Bytes> {
+    return Bytes {
+      ptr: self.ptr as *const u8,
+      end: (self.ptr as usize + self.len) as *const u8,
+    };
+  }
+
+  fn chars(ref<Self>): own<Chars> {
+    return Chars {
+      ptr: self.ptr as *const u8,
+      end: (self.ptr as usize + self.len) as *const u8,
+    };
+  }
+
+  fn lines(ref<Self>): own<Lines> {
+    return Lines {
+      ptr: self.ptr as *const u8,
+      end: (self.ptr as usize + self.len) as *const u8,
+    };
+  }
+
+  fn into_bytes(own<Self>): own<Vec<u8>> {
+    let v: Vec<u8> = Vec::with_capacity(self.len);
+    let i: i32 = 0;
+    while (i as usize) < self.len {
+      v.push(self.ptr[i as usize]);
+      i = i + 1;
+    }
+    return v;
+  }
+
   // Internal: ensure capacity for at least `min_cap` bytes.
   fn ensure_capacity(refmut<Self>, min_cap: usize): void {
     if min_cap <= self.cap { return; }
@@ -266,3 +297,95 @@ impl PartialEq for String {
 }
 
 impl Eq for String {}
+
+/// Raw byte iterator over String.
+struct Bytes {
+  ptr: *const u8,
+  end: *const u8,
+}
+
+impl Iterator for Bytes {
+  type Item = u8;
+  fn next(refmut<Self>): Option<u8> {
+    if self.ptr as usize >= self.end as usize { return Option::None; }
+    const b = unsafe { *self.ptr };
+    self.ptr = (self.ptr as usize + 1) as *const u8;
+    return Option::Some(b);
+  }
+}
+
+/// UTF-8 character iterator over String.
+struct Chars {
+  ptr: *const u8,
+  end: *const u8,
+}
+
+impl Iterator for Chars {
+  type Item = char;
+  fn next(refmut<Self>): Option<char> {
+    if self.ptr as usize >= self.end as usize { return Option::None; }
+    const b0 = unsafe { *self.ptr } as u32;
+    let cp: u32 = 0;
+    let seq_len: i32 = 1;
+    if b0 < 0x80 {
+      cp = b0;
+      seq_len = 1;
+    } else if (b0 & 0xE0) == 0xC0 {
+      cp = b0 & 0x1F;
+      seq_len = 2;
+    } else if (b0 & 0xF0) == 0xE0 {
+      cp = b0 & 0x0F;
+      seq_len = 3;
+    } else if (b0 & 0xF8) == 0xF0 {
+      cp = b0 & 0x07;
+      seq_len = 4;
+    } else {
+      // Invalid leading byte — skip it.
+      self.ptr = (self.ptr as usize + 1) as *const u8;
+      return Option::Some(0xFFFD as char); // replacement char
+    }
+    let i: i32 = 1;
+    while i < seq_len {
+      const ptr_offset = (self.ptr as usize + i as usize) as *const u8;
+      if ptr_offset as usize >= self.end as usize { break; }
+      const cont = unsafe { *ptr_offset } as u32;
+      cp = (cp << 6) | (cont & 0x3F);
+      i = i + 1;
+    }
+    self.ptr = (self.ptr as usize + seq_len as usize) as *const u8;
+    return Option::Some(cp as char);
+  }
+}
+
+/// Line iterator over String (splits on \n).
+struct Lines {
+  ptr: *const u8,
+  end: *const u8,
+}
+
+impl Iterator for Lines {
+  type Item = ref<str>;
+  fn next(refmut<Self>): Option<ref<str>> {
+    if self.ptr as usize >= self.end as usize { return Option::None; }
+    const start = self.ptr;
+    // Scan for \n.
+    while self.ptr as usize < self.end as usize {
+      const b = unsafe { *self.ptr };
+      if b == 0x0A { // '\n'
+        let line_len = self.ptr as usize - start as usize;
+        // Skip \r before \n if present.
+        if line_len > 0 {
+          const prev = (self.ptr as usize - 1) as *const u8;
+          if unsafe { *prev } == 0x0D { line_len = line_len - 1; }
+        }
+        self.ptr = (self.ptr as usize + 1) as *const u8; // skip \n
+        return Option::Some(unsafe { str::from_raw_parts(start, line_len) });
+      }
+      self.ptr = (self.ptr as usize + 1) as *const u8;
+    }
+    // Last line (no trailing \n).
+    const len = self.ptr as usize - start as usize;
+    if len == 0 { return Option::None; }
+    return Option::Some(unsafe { str::from_raw_parts(start, len) });
+  }
+}
