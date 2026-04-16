@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~78% RFC coverage. 244 lit tests at 100%. 75 std library files (33,900+ LOC). Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~84% RFC coverage. 245 lit tests at 100%. 75 std library files (34,200+ LOC). 29 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -24,7 +24,7 @@ lib/
 │                  sync_rt.c, arc_rt.c, rc_rt.c, atomics.c, wasi_*.c (1227 LOC)
 ├── Driver/        Driver.cpp (700+ LOC) — CLI, pipeline orchestration, LSP, Wasm linking
 include/asc/       Headers for all modules
-test/              244 lit tests (e2e, integration, std, Lex, Parse, Sema)
+test/              245 lit tests (e2e, integration, std, Lex, Parse, Sema)
 rfcs/              20 accepted RFCs — source of truth for design
 docs/superpowers/  Design specs and implementation plans
 tools/asc/         main.cpp entry point
@@ -134,25 +134,25 @@ Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default,
 | 0001 | Project Overview | **100%** |
 | 0002 | Surface Syntax | **95%** |
 | 0003 | Compiler Pipeline | **95%** |
-| 0004 | Target Support | **83%** |
-| 0005 | Ownership Model | **80%** |
-| 0006 | Borrow Checker | **82%** |
+| 0004 | Target Support | **~86%** |
+| 0005 | Ownership Model | **~83%** |
+| 0006 | Borrow Checker | **~85%** |
 | 0007 | Concurrency | ~35% |
 | 0008 | Memory Model | ~40% |
 | 0009 | Panic/Unwind | ~45% |
 | 0010 | Toolchain/DX | **88%** |
 | 0011 | Core Traits | **~90%** |
 | 0012 | Memory Module | **85%** |
-| 0013 | Collections/String | **~85%** |
+| 0013 | Collections/String | **~88%** |
 | 0014 | Concurrency/IO | **~88%** |
-| 0015 | Complete Syntax | **88%** |
+| 0015 | Complete Syntax | **~91%** |
 | 0016 | JSON | ~25% |
-| 0017 | Collections Utils | **~38%** |
+| 0017 | Collections Utils | **~40%** |
 | 0018 | Encoding/Crypto | **~75%** |
 | 0019 | Path/Config | **~72%** |
 | 0020 | Async Utilities | ~20% |
 
-**Overall weighted: ~80%**
+**Overall weighted: ~84%**
 
 ## Known Gaps
 
