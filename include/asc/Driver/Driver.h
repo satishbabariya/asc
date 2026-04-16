@@ -42,6 +42,8 @@ struct DriverOptions {
   bool printMLIR = false;   // --emit mlir
   bool printLLVMIR = false; // --emit llvmir
   std::string wasmFeatures; // --wasm-features (e.g. "+bulk-memory,+sign-ext")
+  unsigned maxThreads = 4;  // --max-threads N (default: 4, used for arena sizing)
+  bool noPanicUnwind = false; // --no-panic-unwind (trap instead of setjmp/longjmp)
 };
 
 /// The driver ties the full compiler pipeline together.

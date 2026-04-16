@@ -184,8 +184,8 @@ bool CodeGenerator::setupTargetMachine() {
       features = opts.wasmFeatures;
     } else {
       // Default features: bulk-memory for memcpy, mutable-globals for TLS,
-      // sign-ext for integer operations.
-      features = "+bulk-memory,+mutable-globals,+sign-ext";
+      // sign-ext for integer operations, tail-call for TCO.
+      features = "+bulk-memory,+mutable-globals,+sign-ext,+tail-call";
     }
   }
   // Use O0 for the legacy PM codegen on all targets. Optimization is handled
