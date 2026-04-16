@@ -375,7 +375,7 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Iterator", std::move(sym));
   }
 
-  // Display trait: fn display(ref<Self>): String
+  // Display trait: fn fmt(ref<Self>, refmut<Formatter>): Result<void, FmtError>
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
     auto *selfRef = ctx.create<RefType>(selfType, loc);
@@ -384,17 +384,25 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     selfParam.type = selfRef;
     selfParam.isSelfRef = true;
     selfParam.loc = loc;
-    auto *displayMethod = ctx.create<FunctionDecl>(
-        "display", std::vector<GenericParam>{},
-        std::vector<ParamDecl>{selfParam},
-        ctx.create<NamedType>("String", std::vector<Type *>{}, loc), nullptr,
+    ParamDecl fmtParam;
+    fmtParam.name = "f";
+    fmtParam.type = ctx.create<RefMutType>(
+        ctx.create<NamedType>("Formatter", std::vector<Type *>{}, loc), loc);
+    fmtParam.loc = loc;
+    auto *fmtMethod = ctx.create<FunctionDecl>(
+        "fmt", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, fmtParam},
+        ctx.create<NamedType>("Result", std::vector<Type *>{
+            ctx.getVoidType(),
+            ctx.create<NamedType>("FmtError", std::vector<Type *>{}, loc)
+        }, loc), nullptr,
         std::vector<WhereConstraint>{}, loc);
-    TraitItem displayItem;
-    displayItem.method = displayMethod;
+    TraitItem fmtItem;
+    fmtItem.method = fmtMethod;
     auto *displayTrait = ctx.create<TraitDecl>(
         "Display", std::vector<GenericParam>{},
         std::vector<Type *>{},
-        std::vector<TraitItem>{displayItem}, loc);
+        std::vector<TraitItem>{fmtItem}, loc);
     traitDecls["Display"] = displayTrait;
     Symbol sym;
     sym.name = "Display";
@@ -402,12 +410,34 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Display", std::move(sym));
   }
 
-  // Debug trait (same as Display but for debug formatting)
+  // Debug trait: fn fmt(ref<Self>, refmut<Formatter>): Result<void, FmtError>
   {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRef = ctx.create<RefType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRef;
+    selfParam.isSelfRef = true;
+    selfParam.loc = loc;
+    ParamDecl fmtParam;
+    fmtParam.name = "f";
+    fmtParam.type = ctx.create<RefMutType>(
+        ctx.create<NamedType>("Formatter", std::vector<Type *>{}, loc), loc);
+    fmtParam.loc = loc;
+    auto *fmtMethod = ctx.create<FunctionDecl>(
+        "fmt", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, fmtParam},
+        ctx.create<NamedType>("Result", std::vector<Type *>{
+            ctx.getVoidType(),
+            ctx.create<NamedType>("FmtError", std::vector<Type *>{}, loc)
+        }, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem fmtItem;
+    fmtItem.method = fmtMethod;
     auto *debugTrait = ctx.create<TraitDecl>(
         "Debug", std::vector<GenericParam>{},
         std::vector<Type *>{},
-        std::vector<TraitItem>{}, loc);
+        std::vector<TraitItem>{fmtItem}, loc);
     traitDecls["Debug"] = debugTrait;
     Symbol sym;
     sym.name = "Debug";
@@ -659,7 +689,7 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Index", std::move(sym));
   }
 
-  // PartialOrd trait: fn partial_cmp(ref<Self>, ref<Self>): i32
+  // PartialOrd trait: fn partial_cmp(ref<Self>, ref<Self>): Option<Ordering>
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
     auto *selfRef = ctx.create<RefType>(selfType, loc);
@@ -676,7 +706,9 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     auto *partialCmpMethod = ctx.create<FunctionDecl>(
         "partial_cmp", std::vector<GenericParam>{},
         std::vector<ParamDecl>{selfParam, otherParam},
-        ctx.getBuiltinType(BuiltinTypeKind::I32), nullptr,
+        ctx.create<NamedType>("Option", std::vector<Type *>{
+            ctx.create<NamedType>("Ordering", std::vector<Type *>{}, loc)
+        }, loc), nullptr,
         std::vector<WhereConstraint>{}, loc);
     TraitItem partialCmpItem;
     partialCmpItem.method = partialCmpMethod;
@@ -691,7 +723,7 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("PartialOrd", std::move(sym));
   }
 
-  // Ord trait: fn cmp(ref<Self>, ref<Self>): i32
+  // Ord trait: fn cmp(ref<Self>, ref<Self>): Ordering
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
     auto *selfRef = ctx.create<RefType>(selfType, loc);
@@ -708,7 +740,7 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     auto *cmpMethod = ctx.create<FunctionDecl>(
         "cmp", std::vector<GenericParam>{},
         std::vector<ParamDecl>{selfParam, otherParam},
-        ctx.getBuiltinType(BuiltinTypeKind::I32), nullptr,
+        ctx.create<NamedType>("Ordering", std::vector<Type *>{}, loc), nullptr,
         std::vector<WhereConstraint>{}, loc);
     TraitItem cmpItem;
     cmpItem.method = cmpMethod;
@@ -723,7 +755,7 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Ord", std::move(sym));
   }
 
-  // Hash trait: fn hash(ref<Self>): u64
+  // Hash trait: fn hash(ref<Self>, refmut<Hasher>): void
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
     auto *selfRef = ctx.create<RefType>(selfType, loc);
@@ -732,10 +764,15 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     selfParam.type = selfRef;
     selfParam.isSelfRef = true;
     selfParam.loc = loc;
+    ParamDecl hasherParam;
+    hasherParam.name = "hasher";
+    hasherParam.type = ctx.create<RefMutType>(
+        ctx.create<NamedType>("Hasher", std::vector<Type *>{}, loc), loc);
+    hasherParam.loc = loc;
     auto *hashMethod = ctx.create<FunctionDecl>(
         "hash", std::vector<GenericParam>{},
-        std::vector<ParamDecl>{selfParam},
-        ctx.getBuiltinType(BuiltinTypeKind::U64), nullptr,
+        std::vector<ParamDecl>{selfParam, hasherParam},
+        ctx.getVoidType(), nullptr,
         std::vector<WhereConstraint>{}, loc);
     TraitItem hashItem;
     hashItem.method = hashMethod;
