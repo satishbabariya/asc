@@ -152,6 +152,7 @@ struct PanicLoweringPass
       struct DropTarget {
         mlir::Value ptr;
         std::string dropName;
+        mlir::Value dropFlag;  // null if no conditional move
       };
       llvm::SmallVector<DropTarget, 4> dropTargets;
       for (auto &block : funcOp.getBody()) {
@@ -163,19 +164,67 @@ struct PanicLoweringPass
           auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(elemType);
           if (!structTy || !structTy.isIdentified()) continue;
           std::string dropName = "__drop_" + structTy.getName().str();
-          if (module.lookupSymbol<mlir::func::FuncOp>(dropName))
-            dropTargets.push_back({allocaOp.getResult(), dropName});
+          if (!module.lookupSymbol<mlir::func::FuncOp>(dropName))
+            continue;
+
+          // Search for own.drop ops referencing this alloca that have a drop_flag.
+          mlir::Value flagPtr;
+          funcOp.walk([&](mlir::Operation *innerOp) {
+            if (innerOp->getName().getStringRef() != "own.drop")
+              return;
+            if (!innerOp->hasAttr("drop_flag"))
+              return;
+            if (innerOp->getNumOperands() >= 2) {
+              mlir::Value dropVal = innerOp->getOperand(0);
+              // Direct reference to our alloca.
+              if (dropVal == allocaOp.getResult()) {
+                flagPtr = innerOp->getOperand(1);
+                return;
+              }
+              // Through load chain: the own.drop operand was loaded from our alloca.
+              if (auto *defOp = dropVal.getDefiningOp()) {
+                if (auto loadOp = mlir::dyn_cast<mlir::LLVM::LoadOp>(defOp)) {
+                  if (loadOp.getAddr() == allocaOp.getResult()) {
+                    flagPtr = innerOp->getOperand(1);
+                  }
+                }
+              }
+            }
+          });
+
+          dropTargets.push_back({allocaOp.getResult(), dropName, flagPtr});
         }
       }
 
-      // Build cleanup block: run destructors, then clear handler + abort.
+      // Build cleanup block: run destructors with drop flag checks, then abort.
       builder.setInsertionPointToStart(cleanupBlock);
 
       for (auto &dt : dropTargets) {
         auto dropFn = module.lookupSymbol<mlir::func::FuncOp>(dt.dropName);
-        if (dropFn)
-          builder.create<mlir::func::CallOp>(loc, dropFn,
-              mlir::ValueRange{dt.ptr});
+        if (!dropFn) continue;
+
+        if (dt.dropFlag) {
+          // Conditional drop: check flag before calling destructor.
+          auto i1Ty = mlir::IntegerType::get(ctx, 1);
+          auto flagVal = builder.create<mlir::LLVM::LoadOp>(loc, i1Ty, dt.dropFlag);
+
+          mlir::Block *dropBlock = new mlir::Block();
+          mlir::Block *mergeBlock = new mlir::Block();
+          funcOp.getBody().getBlocks().insertAfter(
+              mlir::Region::iterator(builder.getInsertionBlock()), dropBlock);
+          funcOp.getBody().getBlocks().insertAfter(
+              mlir::Region::iterator(dropBlock), mergeBlock);
+
+          builder.create<mlir::LLVM::CondBrOp>(loc, flagVal, dropBlock, mergeBlock);
+
+          builder.setInsertionPointToStart(dropBlock);
+          builder.create<mlir::func::CallOp>(loc, dropFn, mlir::ValueRange{dt.ptr});
+          builder.create<mlir::LLVM::BrOp>(loc, mlir::ValueRange{}, mergeBlock);
+
+          builder.setInsertionPointToStart(mergeBlock);
+        } else {
+          builder.create<mlir::func::CallOp>(loc, dropFn, mlir::ValueRange{dt.ptr});
+        }
       }
 
       builder.create<mlir::LLVM::CallOp>(loc, clearHandlerFn,

@@ -318,6 +318,13 @@ void PanicScopeWrapPass::runOnOperation() {
   if (func.isDeclaration())
     return;
 
+  // Check for --no-panic-unwind opt-out (RFC-0009).
+  // When set, panics trap directly — no try/catch wrapping needed.
+  if (auto moduleOp = func->getParentOfType<mlir::ModuleOp>()) {
+    if (moduleOp->hasAttr("asc.no_panic_unwind"))
+      return;
+  }
+
   // Determine target: check if any ancestor module has a wasm target triple.
   isWasmTarget = true; // Default to Wasm.
   if (auto moduleOp = func->getParentOfType<mlir::ModuleOp>()) {

@@ -42,6 +42,11 @@ void *memset(void *dst, int c, unsigned long n) {
 
 #endif // __wasm__
 
+// Forward declaration for OOM panic.
+void __asc_panic(const char *msg, unsigned int msg_len,
+                 const char *file, unsigned int file_len,
+                 unsigned int line, unsigned int col);
+
 /* ── Thread-Local Arena Allocator ────────────────────────────── */
 
 #ifndef __wasm__
@@ -50,6 +55,10 @@ extern void free(void *ptr);
 #endif
 
 #define ASC_DEFAULT_ARENA_SIZE (1024 * 1024) /* 1 MB */
+#define PER_THREAD_STACK_SIZE (256 * 1024)  /* 256 KB per thread stack */
+
+// Weak default — compiler emits a strong definition via --max-threads to override.
+__attribute__((weak)) unsigned int __asc_max_threads = 4;
 
 #ifdef __wasm__
 static unsigned char __asc_arena_buf[ASC_DEFAULT_ARENA_SIZE];
@@ -63,10 +72,14 @@ _Thread_local static unsigned char *__asc_arena_end = 0;
 
 void __asc_arena_init(unsigned long size) {
 #ifndef __wasm__
+  unsigned long thread_arena = (unsigned long)__asc_max_threads * PER_THREAD_STACK_SIZE;
+  unsigned long actual_size = size > thread_arena ? size : thread_arena;
+  if (actual_size < ASC_DEFAULT_ARENA_SIZE)
+    actual_size = ASC_DEFAULT_ARENA_SIZE;
   if (__asc_arena_buf) free(__asc_arena_buf);
-  __asc_arena_buf = (unsigned char *)malloc(size);
+  __asc_arena_buf = (unsigned char *)malloc(actual_size);
   __asc_arena_ptr = __asc_arena_buf;
-  __asc_arena_end = __asc_arena_buf + size;
+  __asc_arena_end = __asc_arena_buf + actual_size;
 #endif
 }
 
@@ -74,7 +87,11 @@ void *__asc_arena_alloc(unsigned long size, unsigned long align) {
   unsigned long addr = (unsigned long)__asc_arena_ptr;
   unsigned long aligned = (addr + align - 1) & ~(align - 1);
   unsigned char *result = (unsigned char *)aligned;
-  if (result + size > __asc_arena_end) return 0;
+  if (result + size > __asc_arena_end) {
+    __asc_panic("arena allocation failed: out of memory", 41,
+                "runtime.c", 9, __LINE__, 0);
+    __builtin_unreachable();
+  }
   __asc_arena_ptr = result + size;
   return result;
 }
@@ -95,7 +112,9 @@ void __asc_arena_destroy(void) {
 }
 
 // Thread-local unwind flag and panic handler for drop-on-panic.
-#ifdef __wasm__
+#if defined(__wasm__) && defined(__wasm_threads__)
+_Thread_local static int __asc_in_unwind = 0;
+#elif defined(__wasm__)
 static int __asc_in_unwind = 0;
 #else
 #include <setjmp.h>
@@ -113,7 +132,9 @@ typedef struct {
     unsigned int col;
 } PanicInfo;
 
-#ifdef __wasm__
+#if defined(__wasm__) && defined(__wasm_threads__)
+_Thread_local static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
+#elif defined(__wasm__)
 static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
 #else
 _Thread_local static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
@@ -243,6 +264,49 @@ void __asc_panic(const char *msg, unsigned int msg_len,
   abort();
 #endif
 }
+
+// catch_unwind — runs a closure and catches any panic (RFC-0009).
+// Returns 0 on success, 1 if a panic was caught.
+// On panic, out_info is filled with the PanicInfo.
+#ifndef __wasm__
+int __asc_catch_unwind(void *(*fn)(void *), void *arg, PanicInfo *out_info) {
+  // Save current handler state.
+  jmp_buf *prev_jmpbuf = __asc_panic_jmpbuf;
+  int prev_unwind = __asc_in_unwind;
+
+  // Set up new handler.
+  jmp_buf buf;
+  __asc_panic_jmpbuf = &buf;
+  __asc_in_unwind = 0;
+
+  if (setjmp(buf) == 0) {
+    // Normal path: call the closure.
+    fn(arg);
+    // Restore previous handler.
+    __asc_panic_jmpbuf = prev_jmpbuf;
+    __asc_in_unwind = prev_unwind;
+    return 0;
+  } else {
+    // Panic path: longjmp returned here.
+    if (out_info) {
+      *out_info = __asc_panic_info;
+    }
+    // Clear unwind flag and restore previous handler.
+    __asc_in_unwind = prev_unwind;
+    __asc_panic_jmpbuf = prev_jmpbuf;
+    return 1;
+  }
+}
+#endif
+
+#ifdef __wasm__
+int __asc_catch_unwind(void *(*fn)(void *), void *arg, void *out_info) {
+  // On Wasm without EH, panics trap — cannot be caught.
+  // Call the function directly; if it panics, the whole program traps.
+  fn(arg);
+  return 0;
+}
+#endif
 
 // Print functions — defined in wasi_io.c for wasm, here for native only.
 // Note: __asc_print and __asc_eprint are in wasi_io.c to avoid duplicates.

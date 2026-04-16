@@ -72,11 +72,22 @@ void __asc_chan_clone(void *channel) {
   __atomic_fetch_add(&ch->ref_count, 1, __ATOMIC_ACQ_REL);
 }
 
-void __asc_chan_drop(void *channel) {
+void __asc_chan_drop(void *channel, unsigned int elem_size,
+                     void (*elem_destructor)(void *)) {
   AscChannel *ch = (AscChannel *)channel;
   uint32_t prev = __atomic_fetch_sub(&ch->ref_count, 1, __ATOMIC_ACQ_REL);
   if (prev == 1) {
-    // Last reference — free the channel and its slot buffer.
+    // Last reference — drain remaining elements.
+    if (elem_destructor) {
+      uint32_t head = __atomic_load_n(&ch->head, __ATOMIC_RELAXED);
+      uint32_t tail = __atomic_load_n(&ch->tail, __ATOMIC_RELAXED);
+      while (head != tail) {
+        uint32_t idx = head % ch->capacity;
+        void *slot = (char *)ch + sizeof(AscChannel) + idx * elem_size;
+        elem_destructor(slot);
+        head++;
+      }
+    }
     free(ch);
   }
 }
