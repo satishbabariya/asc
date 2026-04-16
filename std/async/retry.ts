@@ -106,6 +106,46 @@ function retry<T, E>(
   return Result::Err(RetryError::Exhausted(last_err.unwrap()));
 }
 
+/// Retry with a custom predicate that decides whether to retry on each error.
+/// If should_retry returns false, stop immediately.
+function retry_if<T, E>(
+  f: () -> Result<own<T>, own<E>>,
+  options: ref<RetryOptions>,
+  should_retry: (ref<E>) -> bool,
+): Result<own<T>, RetryError<E>> {
+  let attempt: u32 = 0;
+  let delay = options.initial_delay_ms;
+  let last_err: Option<own<E>> = Option::None;
+
+  while attempt < options.max_attempts {
+    let result = f();
+    match result {
+      Result::Ok(v) => { return Result::Ok(v); },
+      Result::Err(e) => {
+        if !should_retry(&e) {
+          return Result::Err(RetryError::Exhausted(e));
+        }
+        last_err = Option::Some(e);
+        attempt = attempt + 1;
+        if attempt < options.max_attempts {
+          let actual_delay = delay;
+          if options.jitter {
+            let jitter_range = delay;
+            let jitter_offset = delay / 2;
+            let rand_val = simple_hash(attempt as u64 * 7 + delay) % jitter_range;
+            actual_delay = jitter_offset + rand_val;
+          }
+          sleep_ms(actual_delay);
+          delay = (delay * options.backoff_multiplier) / 1000;
+          if delay > options.max_delay_ms { delay = options.max_delay_ms; }
+        }
+      },
+    }
+  }
+
+  return Result::Err(RetryError::Exhausted(last_err.unwrap()));
+}
+
 /// Retry an async fallible function with exponential backoff.
 async function retry_async<T, E>(
   f: async () -> Result<own<T>, own<E>>,

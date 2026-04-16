@@ -55,6 +55,32 @@ impl Semaphore {
     let guard = self.count.lock();
     return *guard;
   }
+
+  /// Get the total number of permits (initial capacity).
+  fn total_permits(ref<Self>): usize {
+    return self.max_permits;
+  }
+
+  /// Acquire a permit with a timeout in milliseconds.
+  /// Returns None if timeout expires before a permit is available.
+  fn acquire_timeout(ref<Self>, timeout_ms: u64): Option<own<SemaphoreGuard>> {
+    @extern("__asc_clock_monotonic")
+    const start_ns = clock_monotonic();
+    const deadline_ns = start_ns + timeout_ms * 1_000_000;
+
+    loop {
+      match self.try_acquire() {
+        Option::Some(guard) => { return Option::Some(guard); },
+        Option::None => {},
+      }
+
+      @extern("__asc_clock_monotonic")
+      const now = clock_monotonic();
+      if now >= deadline_ns {
+        return Option::None;
+      }
+    }
+  }
 }
 
 /// RAII guard that releases a semaphore permit when dropped.
