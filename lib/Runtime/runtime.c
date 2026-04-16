@@ -112,7 +112,9 @@ void __asc_arena_destroy(void) {
 }
 
 // Thread-local unwind flag and panic handler for drop-on-panic.
-#ifdef __wasm__
+#if defined(__wasm__) && defined(__wasm_threads__)
+_Thread_local static int __asc_in_unwind = 0;
+#elif defined(__wasm__)
 static int __asc_in_unwind = 0;
 #else
 #include <setjmp.h>
@@ -130,7 +132,9 @@ typedef struct {
     unsigned int col;
 } PanicInfo;
 
-#ifdef __wasm__
+#if defined(__wasm__) && defined(__wasm_threads__)
+_Thread_local static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
+#elif defined(__wasm__)
 static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};
 #else
 _Thread_local static PanicInfo __asc_panic_info = {0, 0, 0, 0, 0, 0};

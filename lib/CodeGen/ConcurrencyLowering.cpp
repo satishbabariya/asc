@@ -55,7 +55,8 @@ void ConcurrencyLoweringPass::declareRuntimeFunctions(mlir::ModuleOp module) {
   {
     auto voidTy = mlir::LLVM::LLVMVoidType::get(module.getContext());
     if (!module.lookupSymbol("__asc_chan_drop")) {
-      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy,
+          {ptrType, i32Type, ptrType});
       builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_chan_drop", fnType);
     }
     if (!module.lookupSymbol("__asc_chan_clone")) {
