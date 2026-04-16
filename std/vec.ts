@@ -159,6 +159,100 @@ impl<T> Vec<T> {
     free(other.ptr);
   }
 
+  fn sort(refmut<Self>): void where T: Ord {
+    if self.len <= 1 { return; }
+    let i: usize = 1;
+    const elem_size = size_of!<T>();
+    while i < self.len {
+      let j: usize = i;
+      while j > 0 {
+        const curr = (self.ptr as usize + j * elem_size) as *const T;
+        const prev = (self.ptr as usize + (j - 1) * elem_size) as *const T;
+        match (unsafe { &*curr }).cmp(unsafe { &*prev }) {
+          Ordering::Less => {
+            let a = (self.ptr as usize + j * elem_size) as *mut u8;
+            let b = (self.ptr as usize + (j - 1) * elem_size) as *mut u8;
+            let k: usize = 0;
+            while k < elem_size {
+              const tmp = a[k];
+              a[k] = b[k];
+              b[k] = tmp;
+              k = k + 1;
+            }
+            j = j - 1;
+          },
+          _ => { break; },
+        }
+      }
+      i = i + 1;
+    }
+  }
+
+  fn sort_by(refmut<Self>, cmp: (ref<T>, ref<T>) -> Ordering): void {
+    if self.len <= 1 { return; }
+    let i: usize = 1;
+    const elem_size = size_of!<T>();
+    while i < self.len {
+      let j: usize = i;
+      while j > 0 {
+        const curr = (self.ptr as usize + j * elem_size) as *const T;
+        const prev = (self.ptr as usize + (j - 1) * elem_size) as *const T;
+        match cmp(unsafe { &*curr }, unsafe { &*prev }) {
+          Ordering::Less => {
+            let a = (self.ptr as usize + j * elem_size) as *mut u8;
+            let b = (self.ptr as usize + (j - 1) * elem_size) as *mut u8;
+            let k: usize = 0;
+            while k < elem_size {
+              const tmp = a[k];
+              a[k] = b[k];
+              b[k] = tmp;
+              k = k + 1;
+            }
+            j = j - 1;
+          },
+          _ => { break; },
+        }
+      }
+      i = i + 1;
+    }
+  }
+
+  fn retain(refmut<Self>, f: (ref<T>) -> bool): void {
+    let write: usize = 0;
+    let read: usize = 0;
+    const elem_size = size_of!<T>();
+    while read < self.len {
+      const slot = (self.ptr as usize + read * elem_size) as *const T;
+      if f(unsafe { &*slot }) {
+        if write != read {
+          const dst = (self.ptr as usize + write * elem_size) as *mut u8;
+          const src = (self.ptr as usize + read * elem_size) as *const u8;
+          memcpy(dst, src, elem_size);
+        }
+        write = write + 1;
+      }
+      read = read + 1;
+    }
+    self.len = write;
+  }
+
+  fn truncate(refmut<Self>, new_len: usize): void {
+    if new_len >= self.len { return; }
+    self.len = new_len;
+  }
+
+  fn iter(ref<Self>): own<VecIter<T>> {
+    const elem_size = size_of!<T>();
+    const end_ptr = (self.ptr as usize + self.len * elem_size) as *const T;
+    return VecIter { ptr: self.ptr as *const T, end: end_ptr };
+  }
+
+  fn iter_mut(refmut<Self>): own<VecIterMut<T>> {
+    const elem_size = size_of!<T>();
+    const end_ptr = (self.ptr as usize + self.len * elem_size) as *mut T;
+    return VecIterMut { ptr: self.ptr, end: end_ptr };
+  }
+
   // Internal: double capacity.
   fn grow(refmut<Self>): void {
     let new_cap = self.cap * 2;
@@ -211,5 +305,39 @@ impl<T: Clone> Clone for Vec<T> {
       i = i + 1;
     }
     return result;
+  }
+}
+
+/// Borrowing iterator over Vec<T>.
+struct VecIter<T> {
+  ptr: *const T,
+  end: *const T,
+}
+
+impl<T> Iterator for VecIter<T> {
+  type Item = ref<T>;
+  fn next(refmut<Self>): Option<ref<T>> {
+    if self.ptr as usize >= self.end as usize { return Option::None; }
+    const elem_size = size_of!<T>();
+    const current = self.ptr;
+    self.ptr = (self.ptr as usize + elem_size) as *const T;
+    return Option::Some(unsafe { &*current });
+  }
+}
+
+/// Mutable borrowing iterator over Vec<T>.
+struct VecIterMut<T> {
+  ptr: *mut T,
+  end: *mut T,
+}
+
+impl<T> Iterator for VecIterMut<T> {
+  type Item = refmut<T>;
+  fn next(refmut<Self>): Option<refmut<T>> {
+    if self.ptr as usize >= self.end as usize { return Option::None; }
+    const elem_size = size_of!<T>();
+    const current = self.ptr;
+    self.ptr = (self.ptr as usize + elem_size) as *mut T;
+    return Option::Some(unsafe { &mut *current });
   }
 }
