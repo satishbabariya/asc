@@ -30,6 +30,14 @@ function get(key: ref<str>): Option<own<String>> {
   return Option::Some(String::from(unsafe { str::from_raw_parts(buf.as_ptr(), out_len) }));
 }
 
+/// Get an environment variable or return a default value.
+function get_or(key: ref<str>, default_value: own<String>): own<String> {
+  match get(key) {
+    Option::Some(val) => { return val; },
+    Option::None => { return default_value; },
+  }
+}
+
 /// Set an environment variable.
 function set(key: ref<str>, value: ref<str>): void {
   __asc_env_set(key.as_ptr(), key.len(), value.as_ptr(), value.len());

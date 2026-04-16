@@ -259,3 +259,50 @@ function relative(from: ref<str>, to: ref<str>): own<String> {
   if result.is_empty() { return String::from("."); }
   return result;
 }
+
+/// Extract basename without extension.
+/// "baz.ts" → "baz", ".hidden" → ".hidden"
+function stem(path: ref<str>): own<String> {
+  let base = basename(path);
+  let bytes = base.as_str().as_bytes();
+  let len = bytes.len();
+  let i = len;
+  while i > 0 {
+    i = i - 1;
+    if bytes[i] == 0x2E {
+      if i == 0 { return base; }
+      return String::from(base.as_str().slice(0, i));
+    }
+  }
+  return base;
+}
+
+/// Check if a path is relative (not absolute).
+function is_relative(path: ref<str>): bool {
+  return !is_absolute(path);
+}
+
+/// Check if a path has a trailing separator.
+function has_trailing_sep(path: ref<str>): bool {
+  let bytes = path.as_bytes();
+  return bytes.len() > 0 && bytes[bytes.len() - 1] == SEPARATOR_BYTE;
+}
+
+/// Platform separator string.
+const SEP_STR: ref<str> = "/";
+
+/// Convert all backslashes to forward slashes.
+function to_posix_sep(path: ref<str>): own<String> {
+  let result = String::with_capacity(path.len());
+  let bytes = path.as_bytes();
+  let i: usize = 0;
+  while i < bytes.len() {
+    if bytes[i] == 0x5C {
+      result.push('/');
+    } else {
+      result.push(bytes[i] as char);
+    }
+    i = i + 1;
+  }
+  return result;
+}
