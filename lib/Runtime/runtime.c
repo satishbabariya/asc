@@ -42,6 +42,11 @@ void *memset(void *dst, int c, unsigned long n) {
 
 #endif // __wasm__
 
+// Forward declaration for OOM panic.
+void __asc_panic(const char *msg, unsigned int msg_len,
+                 const char *file, unsigned int file_len,
+                 unsigned int line, unsigned int col);
+
 /* ── Thread-Local Arena Allocator ────────────────────────────── */
 
 #ifndef __wasm__
@@ -74,7 +79,11 @@ void *__asc_arena_alloc(unsigned long size, unsigned long align) {
   unsigned long addr = (unsigned long)__asc_arena_ptr;
   unsigned long aligned = (addr + align - 1) & ~(align - 1);
   unsigned char *result = (unsigned char *)aligned;
-  if (result + size > __asc_arena_end) return 0;
+  if (result + size > __asc_arena_end) {
+    __asc_panic("arena allocation failed: out of memory", 41,
+                "runtime.c", 9, __LINE__, 0);
+    __builtin_unreachable();
+  }
   __asc_arena_ptr = result + size;
   return result;
 }
