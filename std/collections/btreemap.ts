@@ -339,6 +339,36 @@ impl<K: Ord, V> BTreeMap<K, V> {
     return BTreeMap::rightmost(node.children.get(last_child).unwrap());
   }
 
+  /// Remove and return the smallest key-value pair.
+  fn pop_first(refmut<Self>): Option<(own<K>, own<V>)> {
+    match self.first_key_value() {
+      Option::None => { return Option::None; },
+      Option::Some(pair) => {
+        const key = pair.0;
+        const value = self.remove(key);
+        match value {
+          Option::Some(v) => { return Option::Some((*key, v)); },
+          Option::None => { return Option::None; },
+        }
+      },
+    }
+  }
+
+  /// Remove and return the largest key-value pair.
+  fn pop_last(refmut<Self>): Option<(own<K>, own<V>)> {
+    match self.last_key_value() {
+      Option::None => { return Option::None; },
+      Option::Some(pair) => {
+        const key = pair.0;
+        const value = self.remove(key);
+        match value {
+          Option::Some(v) => { return Option::Some((*key, v)); },
+          Option::None => { return Option::None; },
+        }
+      },
+    }
+  }
+
   fn clear(refmut<Self>): void {
     self.root = Option::None;
     self.len = 0;

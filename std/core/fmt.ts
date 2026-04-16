@@ -165,6 +165,78 @@ impl Display for str {
   }
 }
 
+impl Display for u32 {
+  fn fmt(ref<Self>, f: refmut<Formatter>): Result<void, FmtError> {
+    // Convert u32 to decimal string.
+    if *self == 0 { return f.write_str("0"); }
+    let buf: [u8; 10] = [0; 10];
+    let pos: i32 = 9;
+    let n = *self;
+    while n > 0 {
+      buf[pos as usize] = (48 + (n % 10)) as u8;
+      n = n / 10;
+      pos = pos - 1;
+    }
+    pos = pos + 1;
+    const start = pos as usize;
+    const len = 10 - start;
+    return f.write_str(unsafe { str::from_raw_parts(&buf[start] as *const u8, len) });
+  }
+}
+
+impl Display for u64 {
+  fn fmt(ref<Self>, f: refmut<Formatter>): Result<void, FmtError> {
+    if *self == 0 { return f.write_str("0"); }
+    let buf: [u8; 20] = [0; 20];
+    let pos: i32 = 19;
+    let n = *self;
+    while n > 0 {
+      buf[pos as usize] = (48 + (n % 10) as u32) as u8;
+      n = n / 10;
+      pos = pos - 1;
+    }
+    pos = pos + 1;
+    const start = pos as usize;
+    const len = 20 - start;
+    return f.write_str(unsafe { str::from_raw_parts(&buf[start] as *const u8, len) });
+  }
+}
+
+impl Display for f32 {
+  fn fmt(ref<Self>, f: refmut<Formatter>): Result<void, FmtError> {
+    // Simplified: convert to f64 and delegate.
+    const as_f64 = *self as f64;
+    return as_f64.fmt(f);
+  }
+}
+
+impl Display for char {
+  fn fmt(ref<Self>, f: refmut<Formatter>): Result<void, FmtError> {
+    // Write the char as a single-character string.
+    let buf: [u8; 4] = [0; 4];
+    const cp = *self as u32;
+    if cp < 0x80 {
+      buf[0] = cp as u8;
+      return f.write_str(unsafe { str::from_raw_parts(&buf[0] as *const u8, 1) });
+    } else if cp < 0x800 {
+      buf[0] = (0xC0 | (cp >> 6)) as u8;
+      buf[1] = (0x80 | (cp & 0x3F)) as u8;
+      return f.write_str(unsafe { str::from_raw_parts(&buf[0] as *const u8, 2) });
+    } else if cp < 0x10000 {
+      buf[0] = (0xE0 | (cp >> 12)) as u8;
+      buf[1] = (0x80 | ((cp >> 6) & 0x3F)) as u8;
+      buf[2] = (0x80 | (cp & 0x3F)) as u8;
+      return f.write_str(unsafe { str::from_raw_parts(&buf[0] as *const u8, 3) });
+    } else {
+      buf[0] = (0xF0 | (cp >> 18)) as u8;
+      buf[1] = (0x80 | ((cp >> 12) & 0x3F)) as u8;
+      buf[2] = (0x80 | ((cp >> 6) & 0x3F)) as u8;
+      buf[3] = (0x80 | (cp & 0x3F)) as u8;
+      return f.write_str(unsafe { str::from_raw_parts(&buf[0] as *const u8, 4) });
+    }
+  }
+}
+
 impl Debug for i32 {
   fn fmt(ref<Self>, f: refmut<Formatter>): Result<void, FmtError> {
     return Display::fmt(self, f);
