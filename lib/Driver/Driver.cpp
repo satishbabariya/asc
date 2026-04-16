@@ -1057,7 +1057,7 @@ ExitCode Driver::lowerToHIR() {
 
   // Set --no-panic-unwind attribute on the MLIR module for PanicScopeWrap.
   if (opts.noPanicUnwind) {
-    (*mlirState->module)->setAttr("asc.no_panic_unwind",
+    (*mlirState->module).getOperation()->setAttr("asc.no_panic_unwind",
         mlir::BoolAttr::get(&mlirState->context, true));
   }
 
