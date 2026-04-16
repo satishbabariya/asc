@@ -238,6 +238,13 @@ impl<T> Vec<T> {
 
   fn truncate(refmut<Self>, new_len: usize): void {
     if new_len >= self.len { return; }
+    let i: i32 = new_len as i32;
+    const elem_size = size_of!<T>();
+    while (i as usize) < self.len {
+      const slot = (self.ptr as usize + (i as usize) * elem_size) as *mut T;
+      unsafe { ptr_drop_in_place(slot); }
+      i = i + 1;
+    }
     self.len = new_len;
   }
 
