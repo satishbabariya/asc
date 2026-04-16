@@ -52,6 +52,24 @@ impl<T> Vec<T> {
     return Option::Some(unsafe { &mut *slot });
   }
 
+  /// Swap two elements at indices a and b.
+  fn swap(refmut<Self>, a: usize, b: usize): void {
+    assert!(a < self.len);
+    assert!(b < self.len);
+    if a == b { return; }
+    const elem_size = size_of!<T>();
+    const ptr_a = (self.ptr as usize + a * elem_size) as *mut u8;
+    const ptr_b = (self.ptr as usize + b * elem_size) as *mut u8;
+    // Byte-by-byte swap.
+    let i: i32 = 0;
+    while (i as usize) < elem_size {
+      const tmp = unsafe { *(ptr_a + i as usize) };
+      unsafe { *(ptr_a + i as usize) = *(ptr_b + i as usize); }
+      unsafe { *(ptr_b + i as usize) = tmp; }
+      i = i + 1;
+    }
+  }
+
   fn first(ref<Self>): Option<ref<T>> { return self.get(0); }
   fn last(ref<Self>): Option<ref<T>> {
     if self.len == 0 { return Option::None; }

@@ -183,6 +183,39 @@ impl String {
     return result;
   }
 
+  /// Split at most n times. Returns Vec with at most n+1 elements.
+  fn splitn(ref<Self>, sep: ref<str>, n: i32): own<Vec<ref<str>>> {
+    let result: Vec<ref<str>> = Vec::new();
+    if n <= 0 { return result; }
+    let start: i32 = 0;
+    let splits: i32 = 0;
+    let i: i32 = 0;
+    const slen = sep.len() as i32;
+    while (i as usize) <= self.len - sep.len() && splits < n - 1 {
+      let matched = true;
+      let j: i32 = 0;
+      while (j as usize) < sep.len() {
+        if self.ptr[(i + j) as usize] != sep.as_ptr()[(j as usize)] {
+          matched = false;
+          break;
+        }
+        j = j + 1;
+      }
+      if matched {
+        const segment = unsafe { str::from_raw_parts((self.ptr as usize + start as usize) as *const u8, (i - start) as usize) };
+        result.push(segment);
+        start = i + slen;
+        i = start;
+        splits = splits + 1;
+      } else {
+        i = i + 1;
+      }
+    }
+    const tail = unsafe { str::from_raw_parts((self.ptr as usize + start as usize) as *const u8, self.len - start as usize) };
+    result.push(tail);
+    return result;
+  }
+
   fn replace(ref<Self>, from: ref<str>, to: ref<str>): own<String> {
     let result = String::new();
     const flen = from.len();

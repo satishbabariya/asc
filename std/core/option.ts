@@ -98,6 +98,26 @@ impl<T> Option<T> {
     }
   }
 
+  /// Take the value out, leaving None in its place.
+  fn take(refmut<Self>): Option<T> {
+    let result = Option::None;
+    match self {
+      Option::Some(_) => {
+        result = *self;
+        *self = Option::None;
+      },
+      Option::None => {},
+    }
+    return result;
+  }
+
+  /// Replace the value, returning the old one.
+  fn replace(refmut<Self>, value: own<T>): Option<T> {
+    let old = self.take();
+    *self = Option::Some(value);
+    return old;
+  }
+
   /// Flatten nested Option.
   fn flatten(own<Self>): Option<T>
     where T: Option<U>
