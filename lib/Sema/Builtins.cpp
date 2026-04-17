@@ -635,6 +635,38 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Div", std::move(sym));
   }
 
+  // Rem trait: fn rem(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *remMethod = ctx.create<FunctionDecl>(
+        "rem", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem remItem;
+    remItem.method = remMethod;
+    auto *remTrait = ctx.create<TraitDecl>(
+        "Rem", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{remItem}, loc);
+    traitDecls["Rem"] = remTrait;
+    Symbol sym;
+    sym.name = "Rem";
+    sym.decl = remTrait;
+    scope->declare("Rem", std::move(sym));
+  }
+
   // Neg trait: fn neg(own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
