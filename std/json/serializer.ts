@@ -141,3 +141,243 @@ function write_object(
   }
   buf.push('}' as char);
 }
+
+// -----------------------------------------------------------------------------
+// JsonWriter — streaming serializer (RFC-0016 §4)
+// -----------------------------------------------------------------------------
+
+/// Frame tags for the JsonWriter state stack.
+/// - `InObject`: we are inside an object, expecting either a key or `}`.
+/// - `InObjectValue`: a key has been written; the next call must write a value.
+/// - `InArray`: we are inside an array, expecting either a value or `]`.
+const WRITER_FRAME_OBJECT: u8 = 1;
+const WRITER_FRAME_OBJECT_VALUE: u8 = 2;
+const WRITER_FRAME_ARRAY: u8 = 3;
+
+/// Streaming JSON serializer with automatic comma/colon insertion.
+///
+/// Maintains an internal stack to track nesting. In debug mode (the default),
+/// invalid sequences — such as writing a value before the containing object has
+/// received a key, or calling `end_array` inside an object — trigger a panic.
+/// Release builds (`debug_checks == false`) skip validation for maximum speed.
+///
+/// Output is written directly to an owned `String` buffer; call `finish()` to
+/// consume the writer and retrieve the serialized document.
+struct JsonWriter {
+  buf: own<String>,
+  /// One entry per open container. Values are `WRITER_FRAME_*` constants.
+  stack: own<Vec<u8>>,
+  /// Number of values or key/value pairs written into the current container.
+  /// Used to decide whether a preceding comma is required.
+  count: own<Vec<usize>>,
+  /// Pretty-print indent width (spaces per level). `0` means compact.
+  indent: usize,
+  /// Whether runtime state-machine validation is active.
+  debug_checks: bool,
+}
+
+impl JsonWriter {
+  /// Create a new compact writer backed by a fresh String buffer.
+  fn new(): own<JsonWriter> {
+    return JsonWriter {
+      buf: String::new(),
+      stack: Vec::new(),
+      count: Vec::new(),
+      indent: 0,
+      debug_checks: true,
+    };
+  }
+
+  /// Create a pretty-printing writer. `indent` is the number of spaces per
+  /// nesting level (e.g. 2 or 4). An `indent` of 0 is equivalent to `new()`.
+  fn pretty(indent: usize): own<JsonWriter> {
+    return JsonWriter {
+      buf: String::new(),
+      stack: Vec::new(),
+      count: Vec::new(),
+      indent: indent,
+      debug_checks: true,
+    };
+  }
+
+  /// Disable runtime validation for performance. Misuse becomes undefined
+  /// behaviour, exactly matching the release-mode contract in the RFC.
+  fn set_debug_checks(refmut<Self>, enabled: bool): void {
+    self.debug_checks = enabled;
+  }
+
+  /// Consume the writer and return the serialized JSON document. In debug mode
+  /// this panics if the document is incomplete (unclosed container).
+  fn finish(own<Self>): own<String> {
+    if self.debug_checks && !self.stack.is_empty() {
+      panic("JsonWriter::finish called with unclosed container");
+    }
+    return self.buf;
+  }
+
+  // --- structural ---------------------------------------------------------
+
+  fn begin_object(refmut<Self>): void {
+    self.before_value();
+    self.buf.push('{' as char);
+    self.stack.push(WRITER_FRAME_OBJECT);
+    self.count.push(0);
+  }
+
+  fn end_object(refmut<Self>): void {
+    if self.debug_checks {
+      if self.stack.is_empty() {
+        panic("JsonWriter::end_object called with no open container");
+      }
+      let top = *self.stack.get(self.stack.len() - 1).unwrap();
+      if top != WRITER_FRAME_OBJECT {
+        panic("JsonWriter::end_object called while not inside an object");
+      }
+    }
+    let n = *self.count.get(self.count.len() - 1).unwrap();
+    self.stack.pop();
+    self.count.pop();
+    if self.indent > 0 && n > 0 {
+      write_indent(ref self.buf, self.indent, self.stack.len());
+    }
+    self.buf.push('}' as char);
+    self.bump_count();
+  }
+
+  fn begin_array(refmut<Self>): void {
+    self.before_value();
+    self.buf.push('[' as char);
+    self.stack.push(WRITER_FRAME_ARRAY);
+    self.count.push(0);
+  }
+
+  fn end_array(refmut<Self>): void {
+    if self.debug_checks {
+      if self.stack.is_empty() {
+        panic("JsonWriter::end_array called with no open container");
+      }
+      let top = *self.stack.get(self.stack.len() - 1).unwrap();
+      if top != WRITER_FRAME_ARRAY {
+        panic("JsonWriter::end_array called while not inside an array");
+      }
+    }
+    let n = *self.count.get(self.count.len() - 1).unwrap();
+    self.stack.pop();
+    self.count.pop();
+    if self.indent > 0 && n > 0 {
+      write_indent(ref self.buf, self.indent, self.stack.len());
+    }
+    self.buf.push(']' as char);
+    self.bump_count();
+  }
+
+  fn write_key(refmut<Self>, key: ref<str>): void {
+    if self.debug_checks {
+      if self.stack.is_empty() {
+        panic("JsonWriter::write_key called at document root");
+      }
+      let top = *self.stack.get(self.stack.len() - 1).unwrap();
+      if top != WRITER_FRAME_OBJECT {
+        panic("JsonWriter::write_key called while not inside an object");
+      }
+    }
+    let idx = self.count.len() - 1;
+    let n = *self.count.get(idx).unwrap();
+    if n > 0 { self.buf.push(',' as char); }
+    if self.indent > 0 {
+      write_indent(ref self.buf, self.indent, self.stack.len());
+    }
+    write_escaped_string(ref self.buf, key);
+    self.buf.push(':' as char);
+    if self.indent > 0 { self.buf.push(' ' as char); }
+    // Flip frame tag to "awaiting value". The frame will be restored to
+    // WRITER_FRAME_OBJECT after the paired value is written.
+    self.stack.set(self.stack.len() - 1, WRITER_FRAME_OBJECT_VALUE);
+  }
+
+  // --- primitives ---------------------------------------------------------
+
+  fn write_null(refmut<Self>): void {
+    self.before_value();
+    self.buf.push_str("null");
+    self.bump_count();
+  }
+
+  fn write_bool(refmut<Self>, v: bool): void {
+    self.before_value();
+    if v { self.buf.push_str("true"); }
+    else { self.buf.push_str("false"); }
+    self.bump_count();
+  }
+
+  fn write_i64(refmut<Self>, v: i64): void {
+    self.before_value();
+    let s = i64_to_string(v);
+    self.buf.push_str(s.as_str());
+    self.bump_count();
+  }
+
+  fn write_u64(refmut<Self>, v: u64): void {
+    self.before_value();
+    let s = u64_to_string(v);
+    self.buf.push_str(s.as_str());
+    self.bump_count();
+  }
+
+  fn write_f64(refmut<Self>, v: f64): void {
+    self.before_value();
+    let s = f64_to_string(v);
+    self.buf.push_str(s.as_str());
+    self.bump_count();
+  }
+
+  fn write_string(refmut<Self>, v: ref<str>): void {
+    self.before_value();
+    write_escaped_string(ref self.buf, v);
+    self.bump_count();
+  }
+
+  // --- internal helpers ---------------------------------------------------
+
+  /// Emit formatting that must appear before any value: a leading comma when
+  /// the current container already has a sibling, then an indent for pretty
+  /// mode. In debug mode this also rejects writing a value where a key is
+  /// expected.
+  fn before_value(refmut<Self>): void {
+    if self.stack.is_empty() {
+      // Top-level value. Allow exactly one root document write.
+      if self.debug_checks && !self.buf.is_empty() {
+        panic("JsonWriter: multiple top-level values");
+      }
+      return;
+    }
+    let idx = self.stack.len() - 1;
+    let top = *self.stack.get(idx).unwrap();
+    if self.debug_checks && top == WRITER_FRAME_OBJECT {
+      panic("JsonWriter: value written where key was expected");
+    }
+    if top == WRITER_FRAME_ARRAY {
+      let n = *self.count.get(idx).unwrap();
+      if n > 0 { self.buf.push(',' as char); }
+      if self.indent > 0 {
+        write_indent(ref self.buf, self.indent, self.stack.len());
+      }
+    }
+    // For WRITER_FRAME_OBJECT_VALUE the comma/indent were already written by
+    // write_key — nothing to do here.
+  }
+
+  /// After a value is written, increment the current container's child count
+  /// and, if we just wrote an object value, restore the frame tag so the next
+  /// write must be a key.
+  fn bump_count(refmut<Self>): void {
+    if self.stack.is_empty() { return; }
+    let idx = self.stack.len() - 1;
+    let n = *self.count.get(idx).unwrap();
+    self.count.set(idx, n + 1);
+    let top = *self.stack.get(idx).unwrap();
+    if top == WRITER_FRAME_OBJECT_VALUE {
+      self.stack.set(idx, WRITER_FRAME_OBJECT);
+    }
+  }
+}
