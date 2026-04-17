@@ -2,25 +2,39 @@
 
 import { JsonValue, JsonError } from './value';
 
-/// Internal parser state holding the input and current position.
+/// Parser state. When `strict` is true, RFC 8259 extensions (trailing
+/// commas, comments, single-quoted strings, unquoted keys, NaN/Infinity)
+/// are rejected — see RFC-0016 §6.4.
 struct JsonParser {
   input: ref<str>,
   pos: usize,
+  strict: bool,
 }
 
-/// Parse a JSON string into a JsonValue.
+/// Parse a JSON string into a JsonValue. Top-level bare values are
+/// accepted per RFC 8259 §2.
 function parse(input: ref<str>): Result<own<JsonValue>, JsonError> {
-  let parser = JsonParser { input: input, pos: 0 };
-  parser.skip_whitespace();
-  let value = parser.parse_value()?;
-  parser.skip_whitespace();
-  if parser.pos < parser.input.len() {
-    return Result::Err(JsonError::UnexpectedToken(parser.pos));
-  }
-  return Result::Ok(value);
+  let parser = JsonParser { input: input, pos: 0, strict: false };
+  return parser.run();
+}
+
+/// Parse a JSON string under strict RFC 8259 rules (RFC-0016 §6.4).
+function parse_strict(input: ref<str>): Result<own<JsonValue>, JsonError> {
+  let parser = JsonParser { input: input, pos: 0, strict: true };
+  return parser.run();
 }
 
 impl JsonParser {
+  fn run(refmut<Self>): Result<own<JsonValue>, JsonError> {
+    self.skip_whitespace();
+    let value = self.parse_value()?;
+    self.skip_whitespace();
+    if self.pos < self.input.len() {
+      return Result::Err(JsonError::UnexpectedToken(self.pos));
+    }
+    return Result::Ok(value);
+  }
+
   fn peek(ref<Self>): Option<u8> {
     if self.pos >= self.input.len() { return Option::None; }
     return Option::Some(self.input.as_bytes()[self.pos]);
@@ -59,6 +73,13 @@ impl JsonParser {
     let c = self.peek();
     if c.is_none() { return Result::Err(JsonError::UnexpectedEof); }
     let ch = c.unwrap();
+
+    // Strict mode explicitly rejects JSON5 extensions that future
+    // lenient-mode code might accept: single-quoted strings ('foo') and
+    // NaN / Infinity / -Infinity literals.
+    if self.strict && (ch == 0x27 || ch == 0x4E || ch == 0x49) {
+      return Result::Err(JsonError::UnexpectedToken(self.pos));
+    }
 
     if ch == 0x22 { // '"'
       let s = self.parse_string()?;
