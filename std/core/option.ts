@@ -50,6 +50,38 @@ impl<T> Option<T> {
     }
   }
 
+  /// Map the value or return a default if None.
+  fn map_or<U>(own<Self>, default: own<U>, f: (own<T>) -> own<U>): own<U> {
+    match self {
+      Option::Some(v) => f(v),
+      Option::None => default,
+    }
+  }
+
+  /// Map the value or compute a default if None.
+  fn map_or_else<U>(own<Self>, default: () -> own<U>, f: (own<T>) -> own<U>): own<U> {
+    match self {
+      Option::Some(v) => f(v),
+      Option::None => default(),
+    }
+  }
+
+  /// Unwrap or panic with the given message.
+  fn expect(own<Self>, msg: ref<String>): own<T> {
+    match self {
+      Option::Some(v) => v,
+      Option::None => { panic!(msg); },
+    }
+  }
+
+  /// True if Some and the predicate holds on the inner value.
+  fn is_some_and(ref<Self>, predicate: (ref<T>) -> bool): bool {
+    match self {
+      Option::Some(v) => predicate(&v),
+      Option::None => false,
+    }
+  }
+
   /// Apply a function that returns Option.
   fn and_then<U>(own<Self>, f: (own<T>) -> Option<U>): Option<U> {
     match self {
@@ -71,6 +103,14 @@ impl<T> Option<T> {
     match self {
       Option::Some(v) => Result::Ok(v),
       Option::None => Result::Err(err),
+    }
+  }
+
+  /// Convert to Result, computing the error lazily if None.
+  fn ok_or_else<E>(own<Self>, err: () -> own<E>): Result<own<T>, own<E>> {
+    match self {
+      Option::Some(v) => Result::Ok(v),
+      Option::None => Result::Err(err()),
     }
   }
 

@@ -31,10 +31,58 @@ impl<T, E> Result<T, E> {
     }
   }
 
+  /// Unwrap or panic with the given message.
+  fn expect(own<Self>, msg: ref<String>): own<T> {
+    match self {
+      Result::Ok(v) => v,
+      Result::Err(_) => { panic!(msg); },
+    }
+  }
+
+  /// Unwrap error or panic with the given message.
+  fn expect_err(own<Self>, msg: ref<String>): own<E> {
+    match self {
+      Result::Ok(_) => { panic!(msg); },
+      Result::Err(e) => e,
+    }
+  }
+
   fn map<U>(own<Self>, f: (own<T>) -> own<U>): Result<U, E> {
     match self {
       Result::Ok(v) => Result::Ok(f(v)),
       Result::Err(e) => Result::Err(e),
+    }
+  }
+
+  /// Map the value or return a default if Err.
+  fn map_or<U>(own<Self>, default: own<U>, f: (own<T>) -> own<U>): own<U> {
+    match self {
+      Result::Ok(v) => f(v),
+      Result::Err(_) => default,
+    }
+  }
+
+  /// Map the value or compute the default from the error.
+  fn map_or_else<U>(own<Self>, default: (own<E>) -> own<U>, f: (own<T>) -> own<U>): own<U> {
+    match self {
+      Result::Ok(v) => f(v),
+      Result::Err(e) => default(e),
+    }
+  }
+
+  /// True if Ok and the predicate holds on the inner value.
+  fn is_ok_and(ref<Self>, predicate: (ref<T>) -> bool): bool {
+    match self {
+      Result::Ok(v) => predicate(&v),
+      Result::Err(_) => false,
+    }
+  }
+
+  /// True if Err and the predicate holds on the error value.
+  fn is_err_and(ref<Self>, predicate: (ref<E>) -> bool): bool {
+    match self {
+      Result::Ok(_) => false,
+      Result::Err(e) => predicate(&e),
     }
   }
   fn map_err<F>(own<Self>, f: (own<E>) -> own<F>): Result<T, F> {
