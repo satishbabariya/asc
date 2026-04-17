@@ -97,6 +97,7 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - `RwLock::new/read_lock/read_unlock/write_lock/write_unlock`
 - `AtomicU64` with load, store, swap, compare_exchange, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor
 - `AtomicUsize` with load, store, swap, compare_exchange, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor
+- `AtomicPtr<T>` with load, store, swap, compare_exchange, compare_exchange_weak (T phantom for pointer-type tagging)
 
 ### Standard Library
 - **Vec\<T\>**: new, push, pop, get, len, is_empty, clear, truncate, iter, fold, map, filter, sort, reverse, dedup, extend, with_capacity, retain (18 methods)
@@ -187,8 +188,8 @@ defers to user-defined `Type_clone` when one exists.
 7. **RFC-0016 JSON** — derive(Serialize/Deserialize) requires unimplemented macro expansion
 8. **RFC-0020 Async** — async/await syntax not supported in compiler (RFC-0015 §21)
 9. **SHA-3** — Keccak sponge not implemented (SHA-2 family complete)
-10. **AtomicPtr** — AtomicI32/U32/I64/Bool/U64/Usize implemented, AtomicPtr not yet
-11. **Scoped threads** — thread::scope API not implemented
+10. **Scoped threads** — thread::scope API not implemented
+11. **Unresolved-symbol permissiveness** — asc check and asc build both accept references to nonexistent types/methods without error (discovered while TDDing AtomicPtr; known-failing tests in test/e2e/trait_*.ts reflect this)
 
 ## Testing
 
