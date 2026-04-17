@@ -667,6 +667,38 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Rem", std::move(sym));
   }
 
+  // BitAnd trait: fn bitand(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *bitandMethod = ctx.create<FunctionDecl>(
+        "bitand", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem bitandItem;
+    bitandItem.method = bitandMethod;
+    auto *bitandTrait = ctx.create<TraitDecl>(
+        "BitAnd", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{bitandItem}, loc);
+    traitDecls["BitAnd"] = bitandTrait;
+    Symbol sym;
+    sym.name = "BitAnd";
+    sym.decl = bitandTrait;
+    scope->declare("BitAnd", std::move(sym));
+  }
+
   // Neg trait: fn neg(own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
