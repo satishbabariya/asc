@@ -4,8 +4,8 @@
 struct Counter { val: i32 }
 
 impl Add for Counter {
-  function add(self: ref<Counter>, other: ref<Counter>): Counter {
-    return Counter { val: self.val + other.val };
+  function add(self: own<Self>, rhs: own<Self>): Counter {
+    return Counter { val: self.val + rhs.val };
   }
 }
 

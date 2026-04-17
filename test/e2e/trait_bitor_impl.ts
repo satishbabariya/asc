@@ -4,7 +4,7 @@
 struct Bits { v: u32 }
 
 impl BitOr for Bits {
-  fn bitor(self: own<Self>, rhs: own<Self>): own<Bits> {
+  fn bitor(self: own<Self>, rhs: own<Self>): Bits {
     return Bits { v: self.v | rhs.v };
   }
 }

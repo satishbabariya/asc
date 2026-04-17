@@ -4,37 +4,37 @@
 struct N { v: u32 }
 
 impl Rem for N {
-  fn rem(self: own<Self>, rhs: own<Self>): own<N> {
+  fn rem(self: own<Self>, rhs: own<Self>): N {
     return N { v: self.v % rhs.v };
   }
 }
 
 impl BitAnd for N {
-  fn bitand(self: own<Self>, rhs: own<Self>): own<N> {
+  fn bitand(self: own<Self>, rhs: own<Self>): N {
     return N { v: self.v & rhs.v };
   }
 }
 
 impl BitOr for N {
-  fn bitor(self: own<Self>, rhs: own<Self>): own<N> {
+  fn bitor(self: own<Self>, rhs: own<Self>): N {
     return N { v: self.v | rhs.v };
   }
 }
 
 impl BitXor for N {
-  fn bitxor(self: own<Self>, rhs: own<Self>): own<N> {
+  fn bitxor(self: own<Self>, rhs: own<Self>): N {
     return N { v: self.v ^ rhs.v };
   }
 }
 
 impl Shl for N {
-  fn shl(self: own<Self>, rhs: own<Self>): own<N> {
+  fn shl(self: own<Self>, rhs: own<Self>): N {
     return N { v: self.v << rhs.v };
   }
 }
 
 impl Shr for N {
-  fn shr(self: own<Self>, rhs: own<Self>): own<N> {
+  fn shr(self: own<Self>, rhs: own<Self>): N {
     return N { v: self.v >> rhs.v };
   }
 }
