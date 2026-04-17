@@ -207,6 +207,10 @@ void Sema::checkImplDecl(ImplDecl *d) {
                 namedType->getName().str() + "'");
           }
         }
+      } else {
+        diags.emitError(
+            d->getLocation(), DiagID::ErrUnknownTrait,
+            "unknown trait '" + namedType->getName().str() + "'");
       }
     }
   }
