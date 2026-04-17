@@ -425,6 +425,23 @@ impl<T> AtomicPtr<T> {
     success: Ordering, failure: Ordering): Result<usize, usize> {
     return self.compare_exchange(expected, new_val, success, failure);
   }
+
+  /// Atomic fetch_add on the stored address. Useful for pointer-bump
+  /// allocators and ring buffer indices. Returns the previous address.
+  fn fetch_ptr_add(ref<Self>, v: usize, order: Ordering): usize {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.add")
+    const old = atomic_fetch_add_u64(ptr, v as u64, order);
+    return old as usize;
+  }
+
+  /// Atomic fetch_sub on the stored address.
+  fn fetch_ptr_sub(ref<Self>, v: usize, order: Ordering): usize {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.sub")
+    const old = atomic_fetch_sub_u64(ptr, v as u64, order);
+    return old as usize;
+  }
 }
 
 // ---------- AtomicBool ----------
