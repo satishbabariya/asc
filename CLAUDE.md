@@ -104,8 +104,8 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - **String**: new, from, push_str, len, as_ptr, clear, eq, concat, trim, char_at, split, starts_with, ends_with, contains, to_uppercase, to_lowercase, chars, lines, bytes, into_bytes (20 methods)
 - **HashMap\<K,V\>**: new, insert, get, contains, remove, len, keys, values, clear, is_empty, entry, or_insert, or_insert_with, and_modify, values_mut (15 methods)
 - **Box\<T\>**: new (malloc-backed)
-- **Arc\<T\>**: new, clone, drop, get, strong_count, weak_count, try_unwrap, downgrade, as_ref, deref, ptr_eq, get_mut (atomic refcount)
-- **Rc\<T\>**: new, clone, drop, get, strong_count, weak_count, try_unwrap, downgrade, as_ref, deref, ptr_eq, get_mut (non-atomic)
+- **Arc\<T\>**: new, clone, drop, get, strong_count, weak_count, try_unwrap, into_inner, downgrade, as_ref, deref, ptr_eq, get_mut, make_mut (atomic refcount; make_mut requires T: Clone)
+- **Rc\<T\>**: new, clone, drop, get, strong_count, weak_count, try_unwrap, into_inner, downgrade, as_ref, deref, ptr_eq, get_mut, make_mut (non-atomic)
 - **Weak\<T\>**: downgrade, upgrade, drop
 - **Option\<T\>**: Some, None, unwrap, is_some, is_none, pattern matching
 - **Result\<T,E\>**: Ok, Err, `?` operator desugaring
@@ -187,9 +187,9 @@ defers to user-defined `Type_clone` when one exists.
 6. **Multi-module linking** — import/export parses but no cross-module IR resolution
 7. **RFC-0016 JSON** — derive(Serialize/Deserialize) requires unimplemented macro expansion
 8. **RFC-0020 Async** — async/await syntax not supported in compiler (RFC-0015 §21)
-9. **SHA-3** — Keccak sponge not implemented (SHA-2 family complete)
-10. **Scoped threads** — thread::scope API not implemented
-11. **Unresolved-symbol permissiveness** — asc check and asc build both accept references to nonexistent types/methods without error (discovered while TDDing AtomicPtr; known-failing tests in test/e2e/trait_*.ts reflect this)
+9. **Scoped threads** — thread::scope API not implemented
+10. **Unresolved-symbol permissiveness** — asc check and asc build both accept references to nonexistent types/methods without error. TDD is defanged at the tooling layer; the trait-validation negative tests previously depending on this (test/e2e/trait_*.ts) were converted to FileCheck-based assertions on the diagnostic output.
+11. **SHA-3 runtime correctness unverified** — Keccak-f[1600] sponge implemented in std/crypto/sha3.ts and compiles cleanly into 290/290 lit tests; NIST test-vector verification awaits an execution-capable test harness.
 
 ## Testing
 
