@@ -71,6 +71,12 @@ impl<T> Rc<T> {
   fn as_ref(ref<Self>): ref<T> {
     return unsafe { &(*self.ptr).value };
   }
+
+  /// Returns true if the two Rcs point to the same allocation.
+  /// Does not compare values — only allocation identity.
+  fn ptr_eq(a: ref<Rc<T>>, b: ref<Rc<T>>): bool {
+    return a.ptr == b.ptr;
+  }
 }
 
 impl<T> Drop for Rc<T> {
