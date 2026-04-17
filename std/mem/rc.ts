@@ -77,6 +77,16 @@ impl<T> Rc<T> {
   fn ptr_eq(a: ref<Rc<T>>, b: ref<Rc<T>>): bool {
     return a.ptr == b.ptr;
   }
+
+  /// Returns a mutable reference to the inner value if this is the sole strong
+  /// and weak reference. Returns None otherwise. Does not consume the Rc.
+  fn get_mut(refmut<Self>): Option<refmut<T>> {
+    const strong = unsafe { (*self.ptr).strong };
+    if strong != 1 { return Option::None; }
+    const weak = unsafe { (*self.ptr).weak };
+    if weak != 1 { return Option::None; }
+    return Option::Some(unsafe { &mut (*self.ptr).value });
+  }
 }
 
 impl<T> Drop for Rc<T> {

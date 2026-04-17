@@ -85,6 +85,18 @@ impl<T> Arc<T> {
   fn ptr_eq(a: ref<Arc<T>>, b: ref<Arc<T>>): bool {
     return a.ptr == b.ptr;
   }
+
+  /// Returns a mutable reference to the inner value if this is the sole strong
+  /// and weak reference. Returns None otherwise. Does not consume the Arc.
+  fn get_mut(refmut<Self>): Option<refmut<T>> {
+    @extern("__atomic_load_n_usize")
+    const strong = atomic_load(unsafe { &(*self.ptr).strong }, Ordering::Acquire);
+    if strong != 1 { return Option::None; }
+    @extern("__atomic_load_n_usize")
+    const weak = atomic_load(unsafe { &(*self.ptr).weak }, Ordering::Acquire);
+    if weak != 1 { return Option::None; }
+    return Option::Some(unsafe { &mut (*self.ptr).value });
+  }
 }
 
 impl<T> Drop for Arc<T> {
