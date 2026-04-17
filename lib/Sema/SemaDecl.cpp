@@ -2,7 +2,27 @@
 
 namespace asc {
 
+static void validateGenericBoundsImpl(
+    const std::vector<GenericParam> &params,
+    const llvm::StringMap<TraitDecl *> &traitDecls,
+    DiagnosticEngine &diags,
+    SourceLocation loc) {
+  for (const auto &p : params) {
+    for (const auto &bound : p.bounds) {
+      if (auto *nt = dynamic_cast<NamedType *>(bound)) {
+        if (traitDecls.find(nt->getName()) == traitDecls.end()) {
+          diags.emitError(
+              loc, DiagID::ErrUnknownTrait,
+              "unknown trait '" + nt->getName().str() + "' in generic bound");
+        }
+      }
+    }
+  }
+}
+
 void Sema::checkFunctionDecl(FunctionDecl *d) {
+  validateGenericBoundsImpl(
+      d->getGenericParams(), traitDecls, diags, d->getLocation());
   // Register function in current scope (skip if already pre-registered for
   // forward reference support — the analyze() pre-pass registers names).
   if (!currentScope->lookupLocal(d->getName())) {
@@ -40,6 +60,8 @@ void Sema::checkFunctionDecl(FunctionDecl *d) {
 }
 
 void Sema::checkStructDecl(StructDecl *d) {
+  validateGenericBoundsImpl(
+      d->getGenericParams(), traitDecls, diags, d->getLocation());
   // Register struct in scope.
   Symbol sym;
   sym.name = d->getName().str();
@@ -157,6 +179,8 @@ void Sema::checkStructDecl(StructDecl *d) {
 }
 
 void Sema::checkEnumDecl(EnumDecl *d) {
+  validateGenericBoundsImpl(
+      d->getGenericParams(), traitDecls, diags, d->getLocation());
   Symbol sym;
   sym.name = d->getName().str();
   sym.decl = d;
@@ -164,6 +188,8 @@ void Sema::checkEnumDecl(EnumDecl *d) {
 }
 
 void Sema::checkTraitDecl(TraitDecl *d) {
+  validateGenericBoundsImpl(
+      d->getGenericParams(), traitDecls, diags, d->getLocation());
   Symbol sym;
   sym.name = d->getName().str();
   sym.decl = d;
@@ -177,6 +203,8 @@ void Sema::checkTraitDecl(TraitDecl *d) {
 }
 
 void Sema::checkImplDecl(ImplDecl *d) {
+  validateGenericBoundsImpl(
+      d->getGenericParams(), traitDecls, diags, d->getLocation());
   // Register impl by target type name for method resolution.
   if (auto *nt = dynamic_cast<NamedType *>(d->getTargetType())) {
     implDecls[nt->getName()].push_back(d);
