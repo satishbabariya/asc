@@ -483,8 +483,10 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
           mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "malloc", fnType);
         }
         auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(location, i64Type, (int64_t)size);
-        storage = builder.create<mlir::LLVM::CallOp>(
-            location, mallocFn, mlir::ValueRange{sizeVal}).getResult();
+        auto mallocCall = builder.create<mlir::LLVM::CallOp>(
+            location, mallocFn, mlir::ValueRange{sizeVal});
+        mallocCall->setAttr("asc.elem_type", mlir::TypeAttr::get(init.getType()));
+        storage = mallocCall.getResult();
       } else {
         auto i64One = builder.create<mlir::LLVM::ConstantOp>(location, i64Type, (int64_t)1);
         storage = builder.create<mlir::LLVM::AllocaOp>(
@@ -816,14 +818,17 @@ mlir::Value HIRBuilder::visitDeclRefExpr(DeclRefExpr *e) {
   if (mlir::isa<mlir::LLVM::LLVMPointerType>(val.getType())) {
     // Check if this is a mutable scalar var (not a struct pointer).
     auto *defOp = val.getDefiningOp();
+    mlir::Type elemType;
     if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
-      auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
-      mlir::Type elemType = allocaOp.getElemType();
-      if (elemType && (elemType.isIntOrIndexOrFloat() ||
-          mlir::isa<mlir::LLVM::LLVMPointerType>(elemType))) {
-        return builder.create<mlir::LLVM::LoadOp>(
-            builder.getUnknownLoc(), elemType, val);
-      }
+      elemType = mlir::cast<mlir::LLVM::AllocaOp>(defOp).getElemType();
+    } else if (defOp && mlir::isa<mlir::LLVM::CallOp>(defOp)) {
+      if (auto attr = defOp->getAttrOfType<mlir::TypeAttr>("asc.elem_type"))
+        elemType = attr.getValue();
+    }
+    if (elemType && (elemType.isIntOrIndexOrFloat() ||
+        mlir::isa<mlir::LLVM::LLVMPointerType>(elemType))) {
+      return builder.create<mlir::LLVM::LoadOp>(
+          builder.getUnknownLoc(), elemType, val);
     }
   }
   return val;
