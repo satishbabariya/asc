@@ -82,6 +82,15 @@ impl<T> Option<T> {
     }
   }
 
+  /// Run a side-effectful observer on the inner value if Some, and return
+  /// self unchanged. Useful for debug printing in a chain.
+  fn inspect(own<Self>, observer: (ref<T>) -> void): Option<T> {
+    match self {
+      Option::Some(v) => { observer(&v); return Option::Some(v); },
+      Option::None => { return Option::None; },
+    }
+  }
+
   /// Apply a function that returns Option.
   fn and_then<U>(own<Self>, f: (own<T>) -> Option<U>): Option<U> {
     match self {

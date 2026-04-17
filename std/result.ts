@@ -85,6 +85,22 @@ impl<T, E> Result<T, E> {
       Result::Err(e) => predicate(&e),
     }
   }
+
+  /// Observe the Ok value without consuming the Result.
+  fn inspect(own<Self>, observer: (ref<T>) -> void): Result<T, E> {
+    match self {
+      Result::Ok(v) => { observer(&v); return Result::Ok(v); },
+      Result::Err(e) => { return Result::Err(e); },
+    }
+  }
+
+  /// Observe the Err value without consuming the Result.
+  fn inspect_err(own<Self>, observer: (ref<E>) -> void): Result<T, E> {
+    match self {
+      Result::Ok(v) => { return Result::Ok(v); },
+      Result::Err(e) => { observer(&e); return Result::Err(e); },
+    }
+  }
   fn map_err<F>(own<Self>, f: (own<E>) -> own<F>): Result<T, F> {
     match self {
       Result::Ok(v) => Result::Ok(v),
