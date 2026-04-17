@@ -2188,10 +2188,10 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       receiverTypeName = nt->getName().str();
   }
 
-  // For eq() and other methods with synthesized impls: defer to user-defined
-  // TypeName_method if it exists. This must run before any built-in intrinsic
-  // so that @derive(PartialEq) methods take priority over generic fallbacks.
-  if ((methodName == "eq" || methodName == "ne") && receiver && !receiverTypeName.empty()) {
+  // For eq() with @derive(PartialEq)-synthesized impls: defer to user-defined
+  // TypeName_eq before any built-in intrinsic. ne() is not synthesized today;
+  // when added it should also dispatch through this path.
+  if (methodName == "eq" && receiver && !receiverTypeName.empty()) {
     std::string mangled = receiverTypeName + "_" + methodName;
     if (auto userFn = module.lookupSymbol<mlir::func::FuncOp>(mangled)) {
       auto callOp = builder.create<mlir::func::CallOp>(location, userFn, args);

@@ -241,8 +241,10 @@ void Sema::analyze(std::vector<Decl *> &items) {
     }
   }
 
-  // Run @derive expansion on each struct first (this happens inside
-  // checkStructDecl too, but we need attributes settled before synthesis).
+  // Expand @derive attributes into marker attributes (@clone, @partialeq,
+  // @default, ...) before synthesis. checkStructDecl is the canonical site
+  // for that expansion, so run it here for every top-level struct. The third
+  // pass below skips structs to avoid re-checking.
   for (auto *item : items) {
     if (auto *sd = dynamic_cast<StructDecl *>(item))
       checkStructDecl(sd);
