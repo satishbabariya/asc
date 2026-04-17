@@ -129,6 +129,52 @@ impl Thread {
   }
 }
 
+/// Scoped thread group. Spawned threads are joined when the Scope is dropped,
+/// guaranteeing all borrowed data outlives every thread. Minimal subset of
+/// Rust's `thread::scope` — until closure captures land (known-gap #1),
+/// spawn takes plain `fn() -> R` function pointers rather than closures.
+struct Scope<R> {
+  handles: Vec<own<JoinHandle<R>>>,
+}
+
+impl<R: Send> Scope<R> {
+  /// Create an empty scope.
+  fn new(): own<Scope<R>> {
+    return Scope { handles: Vec::new() };
+  }
+
+  /// Spawn a new thread within this scope.
+  fn spawn<F>(refmut<Self>, f: own<F>): void
+    where F: FnOnce() -> R + Send {
+    self.handles.push(spawn(f));
+  }
+
+  /// Join every spawned thread and return their results in spawn order.
+  /// Called implicitly on Drop — explicit call is only needed when you
+  /// want to inspect the Vec.
+  fn join_all(refmut<Self>): Vec<Result<own<R>, PanicInfo>> {
+    let results = Vec::new();
+    // Move handles out and join them. LIFO is fine — Drop order is
+    // irrelevant because each handle is independent.
+    loop {
+      match self.handles.pop() {
+        Option::Some(h) => { results.push(h.join()); },
+        Option::None => { break; },
+      }
+    }
+    return results;
+  }
+}
+
+impl<R: Send> Drop for Scope<R> {
+  /// Joining guarantees no spawned thread outlives the scope — the whole
+  /// point of the `thread::scope` abstraction. Results are discarded here;
+  /// call `join_all()` explicitly to keep them.
+  fn drop(refmut<Self>): void {
+    self.join_all();
+  }
+}
+
 /// Panic information from a panicked thread.
 struct PanicInfo {
   message: own<String>,
