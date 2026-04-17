@@ -818,14 +818,17 @@ mlir::Value HIRBuilder::visitDeclRefExpr(DeclRefExpr *e) {
   if (mlir::isa<mlir::LLVM::LLVMPointerType>(val.getType())) {
     // Check if this is a mutable scalar var (not a struct pointer).
     auto *defOp = val.getDefiningOp();
+    mlir::Type elemType;
     if (defOp && mlir::isa<mlir::LLVM::AllocaOp>(defOp)) {
-      auto allocaOp = mlir::cast<mlir::LLVM::AllocaOp>(defOp);
-      mlir::Type elemType = allocaOp.getElemType();
-      if (elemType && (elemType.isIntOrIndexOrFloat() ||
-          mlir::isa<mlir::LLVM::LLVMPointerType>(elemType))) {
-        return builder.create<mlir::LLVM::LoadOp>(
-            builder.getUnknownLoc(), elemType, val);
-      }
+      elemType = mlir::cast<mlir::LLVM::AllocaOp>(defOp).getElemType();
+    } else if (defOp && mlir::isa<mlir::LLVM::CallOp>(defOp)) {
+      if (auto attr = defOp->getAttrOfType<mlir::TypeAttr>("asc.elem_type"))
+        elemType = attr.getValue();
+    }
+    if (elemType && (elemType.isIntOrIndexOrFloat() ||
+        mlir::isa<mlir::LLVM::LLVMPointerType>(elemType))) {
+      return builder.create<mlir::LLVM::LoadOp>(
+          builder.getUnknownLoc(), elemType, val);
     }
   }
   return val;
