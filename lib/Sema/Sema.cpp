@@ -1,4 +1,5 @@
 #include "asc/Sema/Sema.h"
+#include <algorithm>
 
 namespace asc {
 
@@ -151,6 +152,64 @@ static void synthesizeDeriveImpls(ASTContext &ctx,
           std::vector<FunctionDecl *>{eqMethod}, loc);
       syntheticImpls.push_back(implDecl);
     }
+
+    bool hasDefault = false;
+    for (const auto &attr : sd->getAttributes()) {
+      if (attr == "@default") hasDefault = true;
+    }
+
+    // derive(Default): fn default(): Type { return Type { f1: <zero>, ... }; }
+    if (hasDefault) {
+      bool allPrimitive = true;
+      std::vector<FieldInit> fieldInits;
+      for (auto *field : sd->getFields()) {
+        Type *ft = field->getType();
+        Expr *zero = nullptr;
+        if (auto *bt = dynamic_cast<BuiltinType *>(ft)) {
+          if (bt->isInteger() || bt->getBuiltinKind() == BuiltinTypeKind::USize ||
+              bt->getBuiltinKind() == BuiltinTypeKind::ISize) {
+            zero = ctx.create<IntegerLiteral>(0, std::string{}, loc);
+          } else if (bt->isFloat()) {
+            zero = ctx.create<FloatLiteral>(0.0, std::string{}, loc);
+          } else if (bt->isBool()) {
+            zero = ctx.create<BoolLiteral>(false, loc);
+          } else if (bt->getBuiltinKind() == BuiltinTypeKind::Char) {
+            zero = ctx.create<CharLiteral>(0, loc);
+          }
+        }
+        if (!zero) {
+          // Non-primitive field — skip synthesis for this struct.
+          allPrimitive = false;
+          break;
+        }
+        FieldInit fi;
+        fi.name = field->getName().str();
+        fi.value = zero;
+        fi.loc = loc;
+        fieldInits.push_back(fi);
+      }
+
+      if (allPrimitive) {
+        auto *structLit = ctx.create<StructLiteral>(
+            typeName, std::move(fieldInits), nullptr, loc);
+        auto *retStmt = ctx.create<ReturnStmt>(structLit, loc);
+        auto *body = ctx.create<CompoundStmt>(
+            std::vector<Stmt *>{retStmt}, nullptr, loc);
+
+        auto *retType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+        auto *defaultMethod = ctx.create<FunctionDecl>(
+            "default", std::vector<GenericParam>{},
+            std::vector<ParamDecl>{},
+            retType, body, std::vector<WhereConstraint>{}, loc);
+
+        auto *targetType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+        auto *traitType = ctx.create<NamedType>("Default", std::vector<Type *>{}, loc);
+        auto *implDecl = ctx.create<ImplDecl>(
+            std::vector<GenericParam>{}, targetType, traitType,
+            std::vector<FunctionDecl *>{defaultMethod}, loc);
+        syntheticImpls.push_back(implDecl);
+      }
+    }
   }
 
   for (auto *impl : syntheticImpls)
@@ -158,9 +217,6 @@ static void synthesizeDeriveImpls(ASTContext &ctx,
 }
 
 void Sema::analyze(std::vector<Decl *> &items) {
-  // Synthesize impl blocks for @derive attributes before analysis.
-  synthesizeDeriveImpls(ctx, items);
-
   // First pass: register all type declarations and impl blocks.
   for (auto *item : items) {
     if (auto *sd = dynamic_cast<StructDecl *>(item))
@@ -175,13 +231,36 @@ void Sema::analyze(std::vector<Decl *> &items) {
       if (auto *nt = dynamic_cast<NamedType *>(id->getTargetType()))
         implDecls[nt->getName()].push_back(id);
     }
-    // Register exported items' inner declarations.
     else if (auto *ed = dynamic_cast<ExportDecl *>(item)) {
       if (auto *inner = ed->getInner()) {
         if (auto *sd = dynamic_cast<StructDecl *>(inner))
           structDecls[sd->getName()] = sd;
         else if (auto *enm = dynamic_cast<EnumDecl *>(inner))
           enumDecls[enm->getName()] = enm;
+      }
+    }
+  }
+
+  // Expand @derive attributes into marker attributes (@clone, @partialeq,
+  // @default, ...) before synthesis. checkStructDecl is the canonical site
+  // for that expansion, so run it here for every top-level struct. The third
+  // pass below skips structs to avoid re-checking.
+  for (auto *item : items) {
+    if (auto *sd = dynamic_cast<StructDecl *>(item))
+      checkStructDecl(sd);
+  }
+
+  // Synthesize impl blocks for @derive attributes — runs AFTER type
+  // registration so synthesized impls can reference struct fields.
+  synthesizeDeriveImpls(ctx, items);
+
+  // Register the newly-synthesized impl blocks.
+  for (auto *item : items) {
+    if (auto *id = dynamic_cast<ImplDecl *>(item)) {
+      if (auto *nt = dynamic_cast<NamedType *>(id->getTargetType())) {
+        auto &v = implDecls[nt->getName()];
+        if (std::find(v.begin(), v.end(), id) == v.end())
+          v.push_back(id);
       }
     }
   }
@@ -209,8 +288,11 @@ void Sema::analyze(std::vector<Decl *> &items) {
   }
 
   // Third pass: check all declarations (bodies, types, etc.).
-  for (auto *item : items)
+  // Skip structs since we already checked them above.
+  for (auto *item : items) {
+    if (dynamic_cast<StructDecl *>(item)) continue;
     checkDecl(item);
+  }
 }
 
 void Sema::checkDecl(Decl *d) {

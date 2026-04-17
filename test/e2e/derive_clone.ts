@@ -1,11 +1,12 @@
-// RUN: %asc check %s
-// Test: @derive(Clone) generates callable clone method.
+// RUN: %asc build %s --emit mlir --target wasm32-wasi > %t.out 2>&1
+// RUN: grep -q "sym_name = \"Counter_clone\"" %t.out
+// RUN: grep -q "func.call.*Counter_clone" %t.out
 
 @derive(Clone)
-struct Point { x: i32, y: i32 }
+struct Counter { n: i32 }
 
 function main(): i32 {
-  let p = Point { x: 10, y: 20 };
+  let p = Counter { n: 42 };
   let q = p.clone();
-  return 0;
+  return q.n;
 }

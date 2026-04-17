@@ -31,8 +31,16 @@ HIRBuilder::buildModule(const std::vector<Decl *> &decls) {
   builder.setInsertionPointToEnd(module.getBody());
 
   pushScope();
+  // First pass: emit all ImplDecl entries so that synthesized methods
+  // (e.g. Color_eq, Counter_clone) are present in the module before any
+  // function body that calls them is processed.
   for (auto *decl : decls)
-    visitDecl(decl);
+    if (dynamic_cast<ImplDecl *>(decl))
+      visitDecl(decl);
+  // Second pass: emit everything else.
+  for (auto *decl : decls)
+    if (!dynamic_cast<ImplDecl *>(decl))
+      visitDecl(decl);
   popScope();
 
   return moduleOp;
@@ -2180,6 +2188,17 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
       receiverTypeName = nt->getName().str();
   }
 
+  // For eq() with @derive(PartialEq)-synthesized impls: defer to user-defined
+  // TypeName_eq before any built-in intrinsic. ne() is not synthesized today;
+  // when added it should also dispatch through this path.
+  if (methodName == "eq" && receiver && !receiverTypeName.empty()) {
+    std::string mangled = receiverTypeName + "_" + methodName;
+    if (auto userFn = module.lookupSymbol<mlir::func::FuncOp>(mangled)) {
+      auto callOp = builder.create<mlir::func::CallOp>(location, userFn, args);
+      return callOp.getNumResults() > 0 ? callOp.getResult(0) : mlir::Value{};
+    }
+  }
+
   // --- Dynamic dispatch for dyn Trait ---
   {
     bool isDynReceiver = false;
@@ -2341,12 +2360,17 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
     return call.getResult();
   }
 
-  // Clone: .clone() → copy the value.
-  // For pointer-backed types (structs), allocate new memory and memcpy.
-  // For scalars, just return the value.
+  // Clone: .clone() → defer to user-defined Type_clone if it exists,
+  // else fall back to memcpy for struct pointers / value passthrough for scalars.
   if (methodName == "clone" && receiver) {
+    if (!receiverTypeName.empty()) {
+      std::string mangled = receiverTypeName + "_clone";
+      if (auto userClone = module.lookupSymbol<mlir::func::FuncOp>(mangled)) {
+        auto callOp = builder.create<mlir::func::CallOp>(location, userClone, args);
+        return callOp.getNumResults() > 0 ? callOp.getResult(0) : mlir::Value{};
+      }
+    }
     if (mlir::isa<mlir::LLVM::LLVMPointerType>(receiver.getType())) {
-      // Look up the struct type for the receiver.
       if (!receiverTypeName.empty()) {
         auto sit = sema.structDecls.find(receiverTypeName);
         if (sit != sema.structDecls.end()) {
@@ -2355,11 +2379,8 @@ mlir::Value HIRBuilder::visitMethodCallExpr(MethodCallExpr *e) {
           auto i64Type = builder.getIntegerType(64);
           auto i64One = builder.create<mlir::LLVM::ConstantOp>(
               location, i64Type, static_cast<int64_t>(1));
-          // Alloca new struct on stack.
           auto cloneAlloca = builder.create<mlir::LLVM::AllocaOp>(
               location, ptrType, structType, i64One);
-          // Copy fields by loading and storing each one.
-          // Simple approach: load entire struct, store into clone.
           auto loaded = builder.create<mlir::LLVM::LoadOp>(
               location, structType, receiver);
           builder.create<mlir::LLVM::StoreOp>(location, loaded, cloneAlloca);

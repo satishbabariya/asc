@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~85% RFC coverage. 256 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~85% RFC coverage. 261 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -112,6 +112,23 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 
 ### Traits (30 registered with method signatures)
 Drop, Clone, PartialEq, Eq, Iterator, Display, Debug, Send, Sync, Copy, Default, Add, Sub, Mul, Div, Neg, Index, IndexMut, PartialOrd, Ord, Hash, From, Into, AsRef, AsMut, Deref, DerefMut, IntoIterator, FromIterator, Sized
+
+### Derive Support
+
+`@derive(Trait1, Trait2, ...)` synthesizes impl blocks at the AST level via
+`synthesizeDeriveImpls()` in `lib/Sema/Sema.cpp`. The `clone` HIR intrinsic
+defers to user-defined `Type_clone` when one exists.
+
+| Trait | Status | Notes |
+|---|---|---|
+| Copy | ✅ end-to-end | Validates all fields are Copy, marks struct |
+| Clone | ✅ end-to-end | Generates `Type_clone` with field-by-field copy |
+| PartialEq | ✅ end-to-end | Generates `Type_eq` with field-by-field `==` chained by `&&` |
+| Default | ✅ end-to-end | Primitive-field structs only — non-primitive fields skip synthesis |
+| Send / Sync | ✅ marker | Marker attribute for Sema validation |
+| Eq | ✅ marker | Marker attribute (PartialEq does the work) |
+| Debug | ⚠️ marker only | Needs Formatter + string concat infra |
+| Hash | ⚠️ marker only | Needs Hasher infra |
 
 ### Toolchain
 - `asc build` — full compile to .wasm/.o with auto-linking
