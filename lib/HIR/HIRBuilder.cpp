@@ -483,8 +483,10 @@ mlir::Value HIRBuilder::visitVarDecl(VarDecl *d) {
           mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(location, "malloc", fnType);
         }
         auto sizeVal = builder.create<mlir::LLVM::ConstantOp>(location, i64Type, (int64_t)size);
-        storage = builder.create<mlir::LLVM::CallOp>(
-            location, mallocFn, mlir::ValueRange{sizeVal}).getResult();
+        auto mallocCall = builder.create<mlir::LLVM::CallOp>(
+            location, mallocFn, mlir::ValueRange{sizeVal});
+        mallocCall->setAttr("asc.elem_type", mlir::TypeAttr::get(init.getType()));
+        storage = mallocCall.getResult();
       } else {
         auto i64One = builder.create<mlir::LLVM::ConstantOp>(location, i64Type, (int64_t)1);
         storage = builder.create<mlir::LLVM::AllocaOp>(
