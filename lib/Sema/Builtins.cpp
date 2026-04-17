@@ -763,6 +763,38 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("BitXor", std::move(sym));
   }
 
+  // Shl trait: fn shl(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *shlMethod = ctx.create<FunctionDecl>(
+        "shl", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem shlItem;
+    shlItem.method = shlMethod;
+    auto *shlTrait = ctx.create<TraitDecl>(
+        "Shl", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{shlItem}, loc);
+    traitDecls["Shl"] = shlTrait;
+    Symbol sym;
+    sym.name = "Shl";
+    sym.decl = shlTrait;
+    scope->declare("Shl", std::move(sym));
+  }
+
   // Neg trait: fn neg(own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
