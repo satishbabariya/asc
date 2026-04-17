@@ -321,6 +321,34 @@ Type *Sema::checkCallExpr(CallExpr *e) {
     fnDecl = dynamic_cast<FunctionDecl *>(declRef->getResolvedDecl());
   }
 
+  // Static method call: Type::method(...) — callee is a PathExpr.
+  // Look up the return type from the registered impl decls so the call
+  // expression gets a proper type annotation for HIR field-access codegen.
+  if (!fnDecl) {
+    if (auto *path = dynamic_cast<PathExpr *>(e->getCallee())) {
+      const auto &segs = path->getSegments();
+      if (segs.size() == 2) {
+        auto it = implDecls.find(segs[0]);
+        if (it != implDecls.end()) {
+          for (auto *impl : it->second) {
+            for (auto *method : impl->getMethods()) {
+              if (method->getName() == segs[1]) {
+                Type *retType = resolveType(method->getReturnType());
+                if (retType && dynamic_cast<OwnType *>(retType))
+                  markExprOwnership(e, OwnershipKind::Owned);
+                else if (retType && isCopyType(retType))
+                  markExprOwnership(e, OwnershipKind::Copied);
+                else
+                  markExprOwnership(e, OwnershipKind::Owned);
+                return retType;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Run ownership inference on arguments.
   if (fnDecl) {
     inferCallOwnership(e, fnDecl);

@@ -152,6 +152,64 @@ static void synthesizeDeriveImpls(ASTContext &ctx,
           std::vector<FunctionDecl *>{eqMethod}, loc);
       syntheticImpls.push_back(implDecl);
     }
+
+    bool hasDefault = false;
+    for (const auto &attr : sd->getAttributes()) {
+      if (attr == "@default") hasDefault = true;
+    }
+
+    // derive(Default): fn default(): Type { return Type { f1: <zero>, ... }; }
+    if (hasDefault) {
+      bool allPrimitive = true;
+      std::vector<FieldInit> fieldInits;
+      for (auto *field : sd->getFields()) {
+        Type *ft = field->getType();
+        Expr *zero = nullptr;
+        if (auto *bt = dynamic_cast<BuiltinType *>(ft)) {
+          if (bt->isInteger() || bt->getBuiltinKind() == BuiltinTypeKind::USize ||
+              bt->getBuiltinKind() == BuiltinTypeKind::ISize) {
+            zero = ctx.create<IntegerLiteral>(0, std::string{}, loc);
+          } else if (bt->isFloat()) {
+            zero = ctx.create<FloatLiteral>(0.0, std::string{}, loc);
+          } else if (bt->isBool()) {
+            zero = ctx.create<BoolLiteral>(false, loc);
+          } else if (bt->getBuiltinKind() == BuiltinTypeKind::Char) {
+            zero = ctx.create<CharLiteral>(0, loc);
+          }
+        }
+        if (!zero) {
+          // Non-primitive field — skip synthesis for this struct.
+          allPrimitive = false;
+          break;
+        }
+        FieldInit fi;
+        fi.name = field->getName().str();
+        fi.value = zero;
+        fi.loc = loc;
+        fieldInits.push_back(fi);
+      }
+
+      if (allPrimitive) {
+        auto *structLit = ctx.create<StructLiteral>(
+            typeName, std::move(fieldInits), nullptr, loc);
+        auto *retStmt = ctx.create<ReturnStmt>(structLit, loc);
+        auto *body = ctx.create<CompoundStmt>(
+            std::vector<Stmt *>{retStmt}, nullptr, loc);
+
+        auto *retType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+        auto *defaultMethod = ctx.create<FunctionDecl>(
+            "default", std::vector<GenericParam>{},
+            std::vector<ParamDecl>{},
+            retType, body, std::vector<WhereConstraint>{}, loc);
+
+        auto *targetType = ctx.create<NamedType>(typeName, std::vector<Type *>{}, loc);
+        auto *traitType = ctx.create<NamedType>("Default", std::vector<Type *>{}, loc);
+        auto *implDecl = ctx.create<ImplDecl>(
+            std::vector<GenericParam>{}, targetType, traitType,
+            std::vector<FunctionDecl *>{defaultMethod}, loc);
+        syntheticImpls.push_back(implDecl);
+      }
+    }
   }
 
   for (auto *impl : syntheticImpls)
