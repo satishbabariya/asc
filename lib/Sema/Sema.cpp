@@ -1,4 +1,5 @@
 #include "asc/Sema/Sema.h"
+#include <algorithm>
 
 namespace asc {
 
@@ -158,9 +159,6 @@ static void synthesizeDeriveImpls(ASTContext &ctx,
 }
 
 void Sema::analyze(std::vector<Decl *> &items) {
-  // Synthesize impl blocks for @derive attributes before analysis.
-  synthesizeDeriveImpls(ctx, items);
-
   // First pass: register all type declarations and impl blocks.
   for (auto *item : items) {
     if (auto *sd = dynamic_cast<StructDecl *>(item))
@@ -175,13 +173,34 @@ void Sema::analyze(std::vector<Decl *> &items) {
       if (auto *nt = dynamic_cast<NamedType *>(id->getTargetType()))
         implDecls[nt->getName()].push_back(id);
     }
-    // Register exported items' inner declarations.
     else if (auto *ed = dynamic_cast<ExportDecl *>(item)) {
       if (auto *inner = ed->getInner()) {
         if (auto *sd = dynamic_cast<StructDecl *>(inner))
           structDecls[sd->getName()] = sd;
         else if (auto *enm = dynamic_cast<EnumDecl *>(inner))
           enumDecls[enm->getName()] = enm;
+      }
+    }
+  }
+
+  // Run @derive expansion on each struct first (this happens inside
+  // checkStructDecl too, but we need attributes settled before synthesis).
+  for (auto *item : items) {
+    if (auto *sd = dynamic_cast<StructDecl *>(item))
+      checkStructDecl(sd);
+  }
+
+  // Synthesize impl blocks for @derive attributes — runs AFTER type
+  // registration so synthesized impls can reference struct fields.
+  synthesizeDeriveImpls(ctx, items);
+
+  // Register the newly-synthesized impl blocks.
+  for (auto *item : items) {
+    if (auto *id = dynamic_cast<ImplDecl *>(item)) {
+      if (auto *nt = dynamic_cast<NamedType *>(id->getTargetType())) {
+        auto &v = implDecls[nt->getName()];
+        if (std::find(v.begin(), v.end(), id) == v.end())
+          v.push_back(id);
       }
     }
   }
@@ -209,8 +228,11 @@ void Sema::analyze(std::vector<Decl *> &items) {
   }
 
   // Third pass: check all declarations (bodies, types, etc.).
-  for (auto *item : items)
+  // Skip structs since we already checked them above.
+  for (auto *item : items) {
+    if (dynamic_cast<StructDecl *>(item)) continue;
     checkDecl(item);
+  }
 }
 
 void Sema::checkDecl(Decl *d) {
