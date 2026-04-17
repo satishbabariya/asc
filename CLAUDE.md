@@ -104,8 +104,8 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - **String**: new, from, push_str, len, as_ptr, clear, eq, concat, trim, char_at, split, starts_with, ends_with, contains, to_uppercase, to_lowercase, chars, lines, bytes, into_bytes (20 methods)
 - **HashMap\<K,V\>**: new, insert, get, contains, remove, len, keys, values, clear, is_empty, entry, or_insert, or_insert_with, and_modify, values_mut (15 methods)
 - **Box\<T\>**: new (malloc-backed)
-- **Arc\<T\>**: new, clone, drop, get, strong_count (atomic refcount)
-- **Rc\<T\>**: new, clone, drop, get, strong_count (non-atomic)
+- **Arc\<T\>**: new, clone, drop, get, strong_count, weak_count, try_unwrap, downgrade, as_ref, deref, ptr_eq, get_mut (atomic refcount)
+- **Rc\<T\>**: new, clone, drop, get, strong_count, weak_count, try_unwrap, downgrade, as_ref, deref, ptr_eq, get_mut (non-atomic)
 - **Weak\<T\>**: downgrade, upgrade, drop
 - **Option\<T\>**: Some, None, unwrap, is_some, is_none, pattern matching
 - **Result\<T,E\>**: Ok, Err, `?` operator desugaring
