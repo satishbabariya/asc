@@ -380,6 +380,53 @@ impl AtomicUsize {
   }
 }
 
+// ---------- AtomicPtr<T> ----------
+
+/// Atomic raw pointer. Stores a pointer-sized address. NOT @copy.
+/// T is a phantom type parameter for pointer-type tagging; storage is usize.
+struct AtomicPtr<T> {
+  value: u64,
+}
+
+impl<T> AtomicPtr<T> {
+  fn new(v: usize): AtomicPtr<T> { return AtomicPtr::<T> { value: v as u64 }; }
+
+  fn load(ref<Self>, order: Ordering): usize {
+    @extern("i64.atomic.load")
+    const raw = atomic_load_u64(&self.value, order);
+    return raw as usize;
+  }
+
+  fn store(ref<Self>, v: usize, order: Ordering): void {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.store")
+    atomic_store_u64(ptr, v as u64, order);
+  }
+
+  fn swap(ref<Self>, v: usize, order: Ordering): usize {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.xchg")
+    const old = atomic_swap_u64(ptr, v as u64, order);
+    return old as usize;
+  }
+
+  fn compare_exchange(ref<Self>, expected: usize, new_val: usize,
+    success: Ordering, failure: Ordering): Result<usize, usize> {
+    const ptr = unsafe { &self.value as *const u64 as *mut u64 };
+    @extern("i64.atomic.rmw.cmpxchg")
+    const result = atomic_compare_exchange_u64(ptr, expected as u64, new_val as u64, success, failure);
+    match result {
+      Result::Ok(old) => { return Result::Ok(old as usize); },
+      Result::Err(actual) => { return Result::Err(actual as usize); },
+    }
+  }
+
+  fn compare_exchange_weak(ref<Self>, expected: usize, new_val: usize,
+    success: Ordering, failure: Ordering): Result<usize, usize> {
+    return self.compare_exchange(expected, new_val, success, failure);
+  }
+}
+
 // ---------- AtomicBool ----------
 
 /// Atomic boolean. NOT @copy.
