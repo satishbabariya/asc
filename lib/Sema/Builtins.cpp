@@ -731,6 +731,38 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("BitOr", std::move(sym));
   }
 
+  // BitXor trait: fn bitxor(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *bitxorMethod = ctx.create<FunctionDecl>(
+        "bitxor", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem bitxorItem;
+    bitxorItem.method = bitxorMethod;
+    auto *bitxorTrait = ctx.create<TraitDecl>(
+        "BitXor", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{bitxorItem}, loc);
+    traitDecls["BitXor"] = bitxorTrait;
+    Symbol sym;
+    sym.name = "BitXor";
+    sym.decl = bitxorTrait;
+    scope->declare("BitXor", std::move(sym));
+  }
+
   // Neg trait: fn neg(own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
