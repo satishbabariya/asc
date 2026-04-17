@@ -129,6 +129,11 @@ impl<T> Weak<T> {
   fn strong_count(ref<Self>): usize {
     return unsafe { (*self.ptr).strong };
   }
+
+  /// Returns true if the two Weaks point to the same allocation.
+  fn ptr_eq(a: ref<Weak<T>>, b: ref<Weak<T>>): bool {
+    return a.ptr == b.ptr;
+  }
 }
 
 impl<T> Drop for Weak<T> {

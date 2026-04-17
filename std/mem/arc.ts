@@ -153,6 +153,11 @@ impl<T> Weak<T> {
     @extern("__atomic_load_n_usize")
     return atomic_load(unsafe { &(*self.ptr).strong }, Ordering::Acquire);
   }
+
+  /// Returns true if the two Weaks point to the same allocation.
+  fn ptr_eq(a: ref<Weak<T>>, b: ref<Weak<T>>): bool {
+    return a.ptr == b.ptr;
+  }
 }
 
 impl<T> Drop for Weak<T> {

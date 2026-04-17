@@ -38,6 +38,23 @@ impl<T> Box<T> {
     forget(self);
     return unsafe { &*ptr };
   }
+
+  /// Consumes the box and returns its raw pointer, suppressing drop. Callers
+  /// take responsibility for eventually freeing the allocation — typically by
+  /// handing the pointer back to `Box::from_raw`.
+  fn into_raw(own<Self>): *mut T {
+    const ptr = self.ptr;
+    forget(self);
+    return ptr;
+  }
+
+  /// Constructs a Box from a raw pointer previously obtained from
+  /// `Box::into_raw` or `Box::leak`. The returned Box owns the allocation
+  /// again and will free it on drop. Unsafe because double-free and
+  /// use-after-free are possible if the pointer is reused.
+  fn from_raw(ptr: *mut T): own<Box<T>> {
+    return Box { ptr: ptr };
+  }
 }
 
 impl<T> Drop for Box<T> {
