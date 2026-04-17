@@ -1,4 +1,5 @@
-// RUN: not %asc check %s 2>&1 | grep -q "unknown trait"
+// RUN: not %asc check %s 2>&1 | FileCheck %s
+// CHECK: unknown trait
 // Test: `impl <UnknownTrait> for T` is rejected.
 
 struct Foo { v: i32 }
