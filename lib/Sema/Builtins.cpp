@@ -886,6 +886,38 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("AddAssign", std::move(sym));
   }
 
+  // SubAssign trait: fn sub_assign(refmut<Self>, own<Self>): void
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *subAssignMethod = ctx.create<FunctionDecl>(
+        "sub_assign", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.getVoidType(), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem subAssignItem;
+    subAssignItem.method = subAssignMethod;
+    auto *subAssignTrait = ctx.create<TraitDecl>(
+        "SubAssign", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{subAssignItem}, loc);
+    traitDecls["SubAssign"] = subAssignTrait;
+    Symbol sym;
+    sym.name = "SubAssign";
+    sym.decl = subAssignTrait;
+    scope->declare("SubAssign", std::move(sym));
+  }
+
   // Index trait: fn index(ref<Self>, usize): ref<Self::Output>
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
