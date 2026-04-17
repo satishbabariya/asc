@@ -854,6 +854,38 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Neg", std::move(sym));
   }
 
+  // AddAssign trait: fn add_assign(refmut<Self>, own<Self>): void
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *addAssignMethod = ctx.create<FunctionDecl>(
+        "add_assign", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.getVoidType(), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem addAssignItem;
+    addAssignItem.method = addAssignMethod;
+    auto *addAssignTrait = ctx.create<TraitDecl>(
+        "AddAssign", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{addAssignItem}, loc);
+    traitDecls["AddAssign"] = addAssignTrait;
+    Symbol sym;
+    sym.name = "AddAssign";
+    sym.decl = addAssignTrait;
+    scope->declare("AddAssign", std::move(sym));
+  }
+
   // Index trait: fn index(ref<Self>, usize): ref<Self::Output>
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
