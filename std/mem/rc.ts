@@ -46,6 +46,15 @@ impl<T> Rc<T> {
     return w - 1;
   }
 
+  /// Consumes the Rc and returns the inner value if this is the sole strong
+  /// owner. Otherwise returns None and the Rc is dropped.
+  fn into_inner(own<Self>): Option<own<T>> {
+    match self.try_unwrap() {
+      Result::Ok(v) => { return Option::Some(v); },
+      Result::Err(_) => { return Option::None; },
+    }
+  }
+
   /// Attempts to unwrap. Returns Ok(T) if this is the sole strong owner.
   fn try_unwrap(own<Self>): Result<own<T>, own<Rc<T>>> {
     if unsafe { (*self.ptr).strong } != 1 {
@@ -86,6 +95,28 @@ impl<T> Rc<T> {
     const weak = unsafe { (*self.ptr).weak };
     if weak != 1 { return Option::None; }
     return Option::Some(unsafe { &mut (*self.ptr).value });
+  }
+}
+
+impl<T: Clone> Rc<T> {
+  /// Clone-on-write: returns a mutable reference. Clones the inner value into
+  /// a new allocation if the Rc is shared (strong > 1 or weak > 1).
+  fn make_mut(refmut<Self>): refmut<T> {
+    const strong = unsafe { (*self.ptr).strong };
+    const weak = unsafe { (*self.ptr).weak };
+    if strong == 1 && weak == 1 {
+      return unsafe { &mut (*self.ptr).value };
+    }
+    const cloned_value = self.as_ref().clone();
+    unsafe { (*self.ptr).strong = (*self.ptr).strong - 1; }
+    const new_ptr = malloc(size_of!<RcInner<T>>()) as *mut RcInner<T>;
+    unsafe {
+      ptr_write(&mut (*new_ptr).value, cloned_value);
+      (*new_ptr).strong = 1;
+      (*new_ptr).weak = 1;
+    }
+    self.ptr = new_ptr;
+    return unsafe { &mut (*self.ptr).value };
   }
 }
 

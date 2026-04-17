@@ -48,6 +48,16 @@ impl<T> Arc<T> {
     return w - 1;
   }
 
+  /// Consumes the Arc and returns the inner value if this is the sole strong
+  /// owner. Otherwise returns None and the Arc is dropped (decrementing the
+  /// strong count). Unlike `try_unwrap`, the Arc is not returned on failure.
+  fn into_inner(own<Self>): Option<own<T>> {
+    match self.try_unwrap() {
+      Result::Ok(v) => { return Option::Some(v); },
+      Result::Err(_) => { return Option::None; },
+    }
+  }
+
   /// Attempts to unwrap the Arc. Returns Ok(T) if this is the sole owner, Err(Arc) otherwise.
   fn try_unwrap(own<Self>): Result<own<T>, own<Arc<T>>> {
     @extern("__atomic_compare_exchange_n_usize")
@@ -96,6 +106,35 @@ impl<T> Arc<T> {
     const weak = atomic_load(unsafe { &(*self.ptr).weak }, Ordering::Acquire);
     if weak != 1 { return Option::None; }
     return Option::Some(unsafe { &mut (*self.ptr).value });
+  }
+}
+
+impl<T: Clone> Arc<T> {
+  /// Clone-on-write: returns a mutable reference to the inner value. If the
+  /// Arc is uniquely owned (strong == 1 AND weak == 1), returns a direct
+  /// reference; otherwise clones the value into a new allocation and
+  /// re-points this Arc at it before returning.
+  fn make_mut(refmut<Self>): refmut<T> {
+    @extern("__atomic_load_n_usize")
+    const strong = atomic_load(unsafe { &(*self.ptr).strong }, Ordering::Acquire);
+    @extern("__atomic_load_n_usize")
+    const weak = atomic_load(unsafe { &(*self.ptr).weak }, Ordering::Acquire);
+    if strong == 1 && weak == 1 {
+      return unsafe { &mut (*self.ptr).value };
+    }
+    const cloned_value = self.as_ref().clone();
+    @extern("__atomic_fetch_sub_usize")
+    atomic_fetch_sub(unsafe { &(*self.ptr).strong }, 1, Ordering::Release);
+    const new_ptr = malloc(size_of!<ArcInner<T>>()) as *mut ArcInner<T>;
+    unsafe {
+      ptr_write(&mut (*new_ptr).value, cloned_value);
+      @extern("__atomic_store_n_usize")
+      atomic_store(&(*new_ptr).strong, 1, Ordering::Release);
+      @extern("__atomic_store_n_usize")
+      atomic_store(&(*new_ptr).weak, 1, Ordering::Release);
+    }
+    self.ptr = new_ptr;
+    return unsafe { &mut (*self.ptr).value };
   }
 }
 
