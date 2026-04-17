@@ -59,6 +59,8 @@ enum class DiagID : unsigned {
   ErrUnterminatedComment = 219,
   ErrInvalidEscape = 220,
   ErrExpectedClosingBracket = 221,
+  ErrUnknownTrait = 222,
+  ErrTraitSignatureMismatch = 223,
 
   // Notes
   NoteDefinedHere = 300,
