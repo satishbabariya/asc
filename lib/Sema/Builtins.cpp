@@ -635,6 +635,198 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     scope->declare("Div", std::move(sym));
   }
 
+  // Rem trait: fn rem(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *remMethod = ctx.create<FunctionDecl>(
+        "rem", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem remItem;
+    remItem.method = remMethod;
+    auto *remTrait = ctx.create<TraitDecl>(
+        "Rem", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{remItem}, loc);
+    traitDecls["Rem"] = remTrait;
+    Symbol sym;
+    sym.name = "Rem";
+    sym.decl = remTrait;
+    scope->declare("Rem", std::move(sym));
+  }
+
+  // BitAnd trait: fn bitand(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *bitandMethod = ctx.create<FunctionDecl>(
+        "bitand", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem bitandItem;
+    bitandItem.method = bitandMethod;
+    auto *bitandTrait = ctx.create<TraitDecl>(
+        "BitAnd", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{bitandItem}, loc);
+    traitDecls["BitAnd"] = bitandTrait;
+    Symbol sym;
+    sym.name = "BitAnd";
+    sym.decl = bitandTrait;
+    scope->declare("BitAnd", std::move(sym));
+  }
+
+  // BitOr trait: fn bitor(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *bitorMethod = ctx.create<FunctionDecl>(
+        "bitor", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem bitorItem;
+    bitorItem.method = bitorMethod;
+    auto *bitorTrait = ctx.create<TraitDecl>(
+        "BitOr", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{bitorItem}, loc);
+    traitDecls["BitOr"] = bitorTrait;
+    Symbol sym;
+    sym.name = "BitOr";
+    sym.decl = bitorTrait;
+    scope->declare("BitOr", std::move(sym));
+  }
+
+  // BitXor trait: fn bitxor(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *bitxorMethod = ctx.create<FunctionDecl>(
+        "bitxor", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem bitxorItem;
+    bitxorItem.method = bitxorMethod;
+    auto *bitxorTrait = ctx.create<TraitDecl>(
+        "BitXor", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{bitxorItem}, loc);
+    traitDecls["BitXor"] = bitxorTrait;
+    Symbol sym;
+    sym.name = "BitXor";
+    sym.decl = bitxorTrait;
+    scope->declare("BitXor", std::move(sym));
+  }
+
+  // Shl trait: fn shl(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *shlMethod = ctx.create<FunctionDecl>(
+        "shl", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem shlItem;
+    shlItem.method = shlMethod;
+    auto *shlTrait = ctx.create<TraitDecl>(
+        "Shl", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{shlItem}, loc);
+    traitDecls["Shl"] = shlTrait;
+    Symbol sym;
+    sym.name = "Shl";
+    sym.decl = shlTrait;
+    scope->declare("Shl", std::move(sym));
+  }
+
+  // Shr trait: fn shr(own<Self>, own<Self>): Self
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfOwn = ctx.create<OwnType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfOwn;
+    selfParam.isSelfRef = false;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *shrMethod = ctx.create<FunctionDecl>(
+        "shr", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem shrItem;
+    shrItem.method = shrMethod;
+    auto *shrTrait = ctx.create<TraitDecl>(
+        "Shr", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{shrItem}, loc);
+    traitDecls["Shr"] = shrTrait;
+    Symbol sym;
+    sym.name = "Shr";
+    sym.decl = shrTrait;
+    scope->declare("Shr", std::move(sym));
+  }
+
   // Neg trait: fn neg(own<Self>): Self
   {
     auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
@@ -660,6 +852,70 @@ void registerBuiltins(ASTContext &ctx, Scope *scope,
     sym.name = "Neg";
     sym.decl = negTrait;
     scope->declare("Neg", std::move(sym));
+  }
+
+  // AddAssign trait: fn add_assign(refmut<Self>, own<Self>): void
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *addAssignMethod = ctx.create<FunctionDecl>(
+        "add_assign", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.getVoidType(), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem addAssignItem;
+    addAssignItem.method = addAssignMethod;
+    auto *addAssignTrait = ctx.create<TraitDecl>(
+        "AddAssign", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{addAssignItem}, loc);
+    traitDecls["AddAssign"] = addAssignTrait;
+    Symbol sym;
+    sym.name = "AddAssign";
+    sym.decl = addAssignTrait;
+    scope->declare("AddAssign", std::move(sym));
+  }
+
+  // SubAssign trait: fn sub_assign(refmut<Self>, own<Self>): void
+  {
+    auto *selfType = ctx.create<NamedType>("Self", std::vector<Type *>{}, loc);
+    auto *selfRefMut = ctx.create<RefMutType>(selfType, loc);
+    ParamDecl selfParam;
+    selfParam.name = "self";
+    selfParam.type = selfRefMut;
+    selfParam.isSelfRefMut = true;
+    selfParam.loc = loc;
+    ParamDecl rhsParam;
+    rhsParam.name = "rhs";
+    rhsParam.type = ctx.create<OwnType>(
+        ctx.create<NamedType>("Self", std::vector<Type *>{}, loc), loc);
+    rhsParam.loc = loc;
+    auto *subAssignMethod = ctx.create<FunctionDecl>(
+        "sub_assign", std::vector<GenericParam>{},
+        std::vector<ParamDecl>{selfParam, rhsParam},
+        ctx.getVoidType(), nullptr,
+        std::vector<WhereConstraint>{}, loc);
+    TraitItem subAssignItem;
+    subAssignItem.method = subAssignMethod;
+    auto *subAssignTrait = ctx.create<TraitDecl>(
+        "SubAssign", std::vector<GenericParam>{},
+        std::vector<Type *>{},
+        std::vector<TraitItem>{subAssignItem}, loc);
+    traitDecls["SubAssign"] = subAssignTrait;
+    Symbol sym;
+    sym.name = "SubAssign";
+    sym.decl = subAssignTrait;
+    scope->declare("SubAssign", std::move(sym));
   }
 
   // Index trait: fn index(ref<Self>, usize): ref<Self::Output>
