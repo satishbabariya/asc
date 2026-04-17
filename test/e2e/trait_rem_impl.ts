@@ -4,7 +4,7 @@
 struct Wrap { v: i32 }
 
 impl Rem for Wrap {
-  fn rem(self: own<Self>, rhs: own<Self>): own<Wrap> {
+  fn rem(self: own<Self>, rhs: own<Self>): Wrap {
     return Wrap { v: self.v % rhs.v };
   }
 }

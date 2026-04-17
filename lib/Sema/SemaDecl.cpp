@@ -20,6 +20,100 @@ static void validateGenericBoundsImpl(
   }
 }
 
+// Returns a new Type * that is `original` with every NamedType("Self")
+// replaced by `concrete`. Preserves wrappers (OwnType/RefType/RefMutType).
+static Type *substSelf(ASTContext &ctx, Type *original, Type *concrete) {
+  if (!original) return nullptr;
+  if (auto *nt = dynamic_cast<NamedType *>(original)) {
+    if (nt->getName() == "Self") return concrete;
+    return original;
+  }
+  if (auto *ot = dynamic_cast<OwnType *>(original)) {
+    Type *inner = substSelf(ctx, ot->getInner(), concrete);
+    if (inner == ot->getInner()) return original;
+    return ctx.create<OwnType>(inner, ot->getLocation());
+  }
+  if (auto *rt = dynamic_cast<RefType *>(original)) {
+    Type *inner = substSelf(ctx, rt->getInner(), concrete);
+    if (inner == rt->getInner()) return original;
+    return ctx.create<RefType>(inner, rt->getLocation());
+  }
+  if (auto *rmt = dynamic_cast<RefMutType *>(original)) {
+    Type *inner = substSelf(ctx, rmt->getInner(), concrete);
+    if (inner == rmt->getInner()) return original;
+    return ctx.create<RefMutType>(inner, rmt->getLocation());
+  }
+  // Other wrapper kinds: return unchanged.
+  return original;
+}
+
+static bool typeEquals(Type *a, Type *b) {
+  if (a == b) return true;
+  if (!a || !b) return false;
+  if (auto *na = dynamic_cast<NamedType *>(a)) {
+    auto *nb = dynamic_cast<NamedType *>(b);
+    return nb && na->getName() == nb->getName();
+  }
+  if (auto *oa = dynamic_cast<OwnType *>(a)) {
+    auto *ob = dynamic_cast<OwnType *>(b);
+    return ob && typeEquals(oa->getInner(), ob->getInner());
+  }
+  if (auto *ra = dynamic_cast<RefType *>(a)) {
+    auto *rb = dynamic_cast<RefType *>(b);
+    return rb && typeEquals(ra->getInner(), rb->getInner());
+  }
+  if (auto *rma = dynamic_cast<RefMutType *>(a)) {
+    auto *rmb = dynamic_cast<RefMutType *>(b);
+    return rmb && typeEquals(rma->getInner(), rmb->getInner());
+  }
+  // For builtin types, check kind equality.
+  if (auto *ba = dynamic_cast<BuiltinType *>(a)) {
+    auto *bb = dynamic_cast<BuiltinType *>(b);
+    return bb && ba->getBuiltinKind() == bb->getBuiltinKind();
+  }
+  return false;
+}
+
+// Resolve an impl param's effective type, handling shorthand self params where
+// the type field is null but the self-ref flags are set (e.g. `fn drop(refmut<Self>)`).
+static Type *resolveImplParamType(ASTContext &ctx, const ParamDecl &p,
+                                  Type *concreteSelf) {
+  if (p.type)
+    return p.type;
+  // Shorthand self params: type was not explicitly written, infer from flags.
+  if (p.isSelfRef)
+    return ctx.create<RefType>(concreteSelf, concreteSelf->getLocation());
+  if (p.isSelfRefMut)
+    return ctx.create<RefMutType>(concreteSelf, concreteSelf->getLocation());
+  if (p.isSelfOwn)
+    return ctx.create<OwnType>(concreteSelf, concreteSelf->getLocation());
+  return nullptr;
+}
+
+static bool signaturesMatchAfterSelfSub(
+    ASTContext &ctx,
+    FunctionDecl *traitMethod,
+    FunctionDecl *implMethod,
+    Type *concreteSelf) {
+  const auto &tp = traitMethod->getParams();
+  const auto &ip = implMethod->getParams();
+  if (tp.size() != ip.size()) return false;
+  for (size_t i = 0; i < tp.size(); ++i) {
+    // Resolve both sides: handles null type with self-ref flags (shorthand self params),
+    // then substitute Self -> concreteSelf.
+    Type *rawExpected = resolveImplParamType(ctx, tp[i], concreteSelf);
+    Type *expected = substSelf(ctx, rawExpected, concreteSelf);
+    Type *rawActual = resolveImplParamType(ctx, ip[i], concreteSelf);
+    Type *actual = substSelf(ctx, rawActual, concreteSelf);
+    if (!typeEquals(expected, actual)) return false;
+  }
+  Type *expectedRet = substSelf(ctx, traitMethod->getReturnType(), concreteSelf);
+  // Also substitute Self in the impl return type.
+  Type *actualRet = substSelf(ctx, implMethod->getReturnType(), concreteSelf);
+  if (!typeEquals(expectedRet, actualRet)) return false;
+  return true;
+}
+
 void Sema::checkFunctionDecl(FunctionDecl *d) {
   validateGenericBoundsImpl(
       d->getGenericParams(), traitDecls, diags, d->getLocation());
@@ -232,6 +326,28 @@ void Sema::checkImplDecl(ImplDecl *d) {
                 d->getLocation(), DiagID::ErrTraitNotImplemented,
                 "missing implementation of '" +
                 item.method->getName().str() + "' from trait '" +
+                namedType->getName().str() + "'");
+          }
+        }
+        // Signature compatibility check.
+        for (const auto &item : trait->getItems()) {
+          if (!item.method || item.method->getBody())
+            continue;
+          FunctionDecl *implMethod = nullptr;
+          for (auto *m : d->getMethods()) {
+            if (m->getName() == item.method->getName()) {
+              implMethod = m;
+              break;
+            }
+          }
+          if (!implMethod) continue;
+          if (!signaturesMatchAfterSelfSub(
+                  ctx, item.method, implMethod, d->getTargetType())) {
+            diags.emitError(
+                implMethod->getLocation(),
+                DiagID::ErrTraitSignatureMismatch,
+                "method '" + implMethod->getName().str() +
+                "' signature does not match trait '" +
                 namedType->getName().str() + "'");
           }
         }

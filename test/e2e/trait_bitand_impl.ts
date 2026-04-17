@@ -4,7 +4,7 @@
 struct Bits { v: u32 }
 
 impl BitAnd for Bits {
-  fn bitand(self: own<Self>, rhs: own<Self>): own<Bits> {
+  fn bitand(self: own<Self>, rhs: own<Self>): Bits {
     return Bits { v: self.v & rhs.v };
   }
 }
