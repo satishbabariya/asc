@@ -1,113 +1,124 @@
-// std/async/debounce.ts — Debounce and throttle wrappers (RFC-0020)
+// std/async/debounce.ts — Debounced function wrapper (RFC-0020)
 
 import { Mutex } from '../sync/mutex';
-import { AtomicU64 } from '../sync/atomic';
+import { AtomicU64, AtomicBool } from '../sync/atomic';
 
-/// A debounced function wrapper. Delays invocation until `delay_ms` has elapsed
-/// since the last call. Only the last call's arguments are used.
-struct Debounced<F: Fn()> {
-  func: own<F>,
+/// A debounced function wrapper. Delays invocation of `f: T -> R` until
+/// `delay_ms` has elapsed since the **last** call. Each new `.call(arg)`
+/// resets the timer; only the most recent argument is used when the
+/// deferred invocation finally fires.
+///
+/// Implementation uses `task.spawn` to run a background waiter that
+/// wakes up after `delay_ms` and checks a generation counter. If a
+/// newer call arrived while the waiter was sleeping, the waiter exits
+/// without firing, leaving the job to the more recent waiter.
+///
+/// T = argument type, R = return type. Both must be `Send` so they
+/// can cross the spawned task boundary.
+struct Debounced<T: Send, R: Send> {
+  func: own<(own<T>) -> own<R>>,
   delay_ms: u64,
-  timer_id: own<Mutex<u64>>,
-  pending: own<Mutex<bool>>,
+  /// Monotonically increasing generation; each `.call()` bumps this.
+  /// A waiter only fires if its captured generation matches.
+  generation: own<AtomicU64>,
+  /// The most recent argument; waiter consumes it on fire.
+  pending_arg: own<Mutex<Option<own<T>>>>,
+  /// True while at least one waiter is scheduled.
+  scheduled: own<AtomicBool>,
 }
 
-impl<F: Fn()> Debounced<F> {
-  /// Create a new debounced wrapper.
-  fn new(func: own<F>, delay_ms: u64): own<Debounced<F>> {
+impl<T: Send, R: Send> Debounced<T, R> {
+  /// Create a new debounced wrapper with the given delay.
+  fn new(f: own<(own<T>) -> own<R>>, delay_ms: u64): own<Debounced<T, R>> {
     return Debounced {
-      func: func,
+      func: f,
       delay_ms: delay_ms,
-      timer_id: Mutex::new(0),
-      pending: Mutex::new(false),
+      generation: AtomicU64::new(0),
+      pending_arg: Mutex::new(Option::None),
+      scheduled: AtomicBool::new(false),
     };
   }
 
-  /// Call the debounced function. Resets the timer on each call.
-  fn call(ref<Self>): void {
-    let timer_guard = self.timer_id.lock();
-    // Cancel any pending timer.
-    if *timer_guard != 0 {
-      cancel_timer(*timer_guard);
-    }
-    // Schedule new invocation.
+  /// Schedule a call. Resets the debounce timer — the inner function
+  /// will only actually fire once `delay_ms` has elapsed with no
+  /// subsequent call. If more calls arrive within the window, only the
+  /// most recent argument survives.
+  fn call(ref<Self>, arg: own<T>): void {
+    // Stash the new argument (dropping any previously-pending one).
+    let guard = self.pending_arg.lock();
+    *guard = Option::Some(arg);
+
+    // Bump generation so any in-flight waiters become stale.
+    let gen = self.generation.fetch_add(1) + 1;
+    self.scheduled.store(true);
+
+    // Spawn a ticker-style waiter. It sleeps for delay_ms then checks
+    // whether it is still the newest waiter before firing.
+    let delay = self.delay_ms;
+    let gen_ref = ref self.generation;
+    let arg_ref = ref self.pending_arg;
     let func_ref = ref self.func;
-    *timer_guard = set_timer(self.delay_ms, || {
-      (*func_ref)();
+    let scheduled_ref = ref self.scheduled;
+    task.spawn(|| {
+      sleep_ms(delay);
+      // Only fire if our generation is still the newest.
+      if gen_ref.load() == gen {
+        let g = arg_ref.lock();
+        let taken = *g;
+        *g = Option::None;
+        scheduled_ref.store(false);
+        match taken {
+          Option::Some(a) => { (*func_ref)(a); },
+          Option::None => {},
+        }
+      }
     });
   }
 
-  /// Cancel any pending invocation.
+  /// Cancel any pending invocation without firing it.
   fn cancel(ref<Self>): void {
-    let timer_guard = self.timer_id.lock();
-    if *timer_guard != 0 {
-      cancel_timer(*timer_guard);
-      *timer_guard = 0;
+    // Bumping generation invalidates any sleeping waiters.
+    self.generation.fetch_add(1);
+    let guard = self.pending_arg.lock();
+    *guard = Option::None;
+    self.scheduled.store(false);
+  }
+
+  /// Immediately invoke with the most-recent pending argument and
+  /// cancel the scheduled waiter. Returns `Some(result)` if a pending
+  /// argument was available, `None` otherwise.
+  fn flush(ref<Self>): Option<own<R>> {
+    // Invalidate any sleeping waiter so it can't double-fire.
+    self.generation.fetch_add(1);
+    self.scheduled.store(false);
+
+    let guard = self.pending_arg.lock();
+    let taken = *guard;
+    *guard = Option::None;
+    match taken {
+      Option::Some(arg) => {
+        let r = (self.func)(arg);
+        return Option::Some(r);
+      },
+      Option::None => { return Option::None; },
     }
   }
 
-  /// Immediately invoke the function and cancel any pending timer.
-  fn flush(ref<Self>): void {
-    self.cancel();
-    (self.func)();
+  /// Return true if a call is currently pending (waiter scheduled).
+  fn is_pending(ref<Self>): bool {
+    return self.scheduled.load();
   }
 }
 
-/// A throttled function wrapper. Ensures the function is called at most once
-/// per `interval_ms` milliseconds.
-struct Throttled<F: Fn()> {
-  func: own<F>,
-  interval_ms: u64,
-  last_call: own<AtomicU64>,
-}
-
-impl<F: Fn()> Throttled<F> {
-  /// Create a new throttled wrapper.
-  fn new(func: own<F>, interval_ms: u64): own<Throttled<F>> {
-    return Throttled {
-      func: func,
-      interval_ms: interval_ms,
-      last_call: AtomicU64::new(0),
-    };
-  }
-
-  /// Call the throttled function. Invokes immediately if enough time has passed,
-  /// otherwise the call is dropped.
-  fn call(ref<Self>): bool {
-    let now = current_time_ms();
-    let last = self.last_call.load();
-    if now - last >= self.interval_ms {
-      if self.last_call.compare_exchange(last, now) {
-        (self.func)();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /// Reset the throttle timer, allowing the next call through immediately.
-  fn reset(ref<Self>): void {
-    self.last_call.store(0);
-  }
-}
-
-/// Convenience: create a debounced function.
-function debounce<F: Fn()>(func: own<F>, delay_ms: u64): own<Debounced<F>> {
-  return Debounced::new(func, delay_ms);
-}
-
-/// Convenience: create a throttled function.
-function throttle<F: Fn()>(func: own<F>, interval_ms: u64): own<Throttled<F>> {
-  return Throttled::new(func, interval_ms);
+/// Convenience free function: create a debounced wrapper.
+function debounce<T: Send, R: Send>(
+  f: own<(own<T>) -> own<R>>,
+  delay_ms: u64,
+): own<Debounced<T, R>> {
+  return Debounced::new(f, delay_ms);
 }
 
 // --- Runtime-provided timer functions ---
 
-@extern("env", "__asc_set_timer")
-declare function set_timer(delay_ms: u64, callback: () -> void): u64;
-
-@extern("env", "__asc_cancel_timer")
-declare function cancel_timer(timer_id: u64): void;
-
-@extern("env", "__asc_current_time_ms")
-declare function current_time_ms(): u64;
+@extern("env", "__asc_sleep_ms")
+declare function sleep_ms(ms: u64): void;
