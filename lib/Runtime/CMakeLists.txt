@@ -11,6 +11,7 @@ if(CMAKE_C_COMPILER)
     wasi_fs.c
     wasi_clock.c
     wasi_random.c
+    wasi_env.c
     atomics.c
     string_rt.c
     vec_rt.c
