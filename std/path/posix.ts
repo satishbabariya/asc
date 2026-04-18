@@ -182,26 +182,38 @@ function resolve(parts: ref<[ref<str>]>): own<String> {
   return normalize(abs.as_str());
 }
 
-/// Replace the extension of a path. `ext` should include the leading dot,
-/// e.g. ".md". Pass "" to strip the extension entirely.
+/// Replace (or add) the extension of a path. `ext` may include the leading
+/// dot or omit it — both `"md"` and `".md"` produce the same result. Pass
+/// the empty string to strip the extension entirely.
+///
+///   with_extname("foo.ts", "js")     → "foo.js"
+///   with_extname("foo", ".js")       → "foo.js"
+///   with_extname("/a/b/c.txt", "md") → "/a/b/c.md"
+///   with_extname("foo.ts", "")       → "foo"
 function with_extname(path: ref<str>, ext: ref<str>): own<String> {
   let dir = dirname(path);
   let base = basename(path);
-  // Strip old extension from basename.
+  // Strip old extension from basename (extname includes the leading dot).
   let old_ext = extname(base.as_str());
   let stem_len = base.len() - old_ext.len();
   let stem = base.as_str().slice(0, stem_len);
 
-  let result = String::from(dir.as_str());
-  if result.as_str() != "/" && result.as_str() != "." || dir.as_str() != "." {
-    if dir.as_str() != "." {
-      result.push(SEPARATOR);
-    } else {
-      result = String::new();
-    }
+  // Prefix the directory. "." means "no directory", so emit nothing — otherwise
+  // append the dir and a separator (root "/" already ends in a separator).
+  let result = String::new();
+  if dir.as_str() != "." {
+    result.push_str(dir.as_str());
+    if !has_trailing_sep(result.as_str()) { result.push(SEPARATOR); }
   }
   result.push_str(stem);
-  result.push_str(ext);
+
+  // Accept ext with or without the leading dot. Empty ext strips.
+  if ext.len() > 0 {
+    if ext.as_bytes()[0] != 0x2E {
+      result.push('.');
+    }
+    result.push_str(ext);
+  }
   return result;
 }
 
@@ -305,4 +317,152 @@ function to_posix_sep(path: ref<str>): own<String> {
     i = i + 1;
   }
   return result;
+}
+
+/// Match a bracket expression `[...]` starting at `pattern[pi+1]` against the
+/// byte `c`. Returns a tuple `(matched, end_index)` where `end_index` is the
+/// index immediately after the closing `]`. If the bracket expression is
+/// malformed (no closing `]`), the `[` is treated as a literal.
+///
+/// Supports `[abc]`, `[!abc]` / `[^abc]` for negation, and ranges `[a-z]`.
+function glob_bracket_match(
+  pattern: ref<[u8]>,
+  pi: usize,
+  plen: usize,
+  c: u8,
+): (bool, usize) {
+  let p = pi + 1;
+  let negate = false;
+  if p < plen && (pattern[p] == 0x21 || pattern[p] == 0x5E) { // '!' or '^'
+    negate = true;
+    p = p + 1;
+  }
+  let matched = false;
+  let first = true;
+  // Find the closing ']'. Per POSIX, a ']' as the first char is literal.
+  while p < plen {
+    let ch = pattern[p];
+    if ch == 0x5D && !first { // ']'
+      if negate { matched = !matched; }
+      return (matched, p + 1);
+    }
+    // Range: a-b (but not at the end, which would be a literal '-').
+    if p + 2 < plen && pattern[p + 1] == 0x2D && pattern[p + 2] != 0x5D {
+      let lo = ch;
+      let hi = pattern[p + 2];
+      if c >= lo && c <= hi { matched = true; }
+      p = p + 3;
+    } else {
+      if c == ch { matched = true; }
+      p = p + 1;
+    }
+    first = false;
+  }
+  // Unterminated '[' — not a valid class; treat the '[' as literal.
+  return (c == 0x5B, pi + 1);
+}
+
+/// Test whether `path` matches the glob `pattern`.
+///
+/// Supported syntax:
+///   `*`         matches any run of characters except `/`
+///   `**`        matches any run of characters including `/`
+///   `?`         matches a single non-`/` character
+///   `[abc]`     character class (supports ranges `[a-z]` and negation `[!abc]`)
+///
+/// This is a pure string match — it does **not** touch the filesystem.
+function glob_match(pattern: ref<str>, path: ref<str>): bool {
+  let p_bytes = pattern.as_bytes();
+  let s_bytes = path.as_bytes();
+  let plen = p_bytes.len();
+  let slen = s_bytes.len();
+
+  // Backtracking state for `*` / `**`.
+  let pi: usize = 0;
+  let si: usize = 0;
+  let star_pi: usize = 0;
+  let star_si: usize = 0;
+  let has_star = false;
+  let star_crosses_sep = false;
+
+  while si < slen {
+    if pi < plen {
+      let pc = p_bytes[pi];
+      if pc == 0x2A { // '*'
+        // Detect doubled star `**` — matches across `/`.
+        let is_double = pi + 1 < plen && p_bytes[pi + 1] == 0x2A;
+        star_crosses_sep = is_double;
+        star_pi = pi;
+        star_si = si;
+        has_star = true;
+        if is_double {
+          pi = pi + 2;
+          // Skip an immediately following '/' so "**/" matches zero segments.
+          if pi < plen && p_bytes[pi] == SEPARATOR_BYTE { pi = pi + 1; }
+        } else {
+          pi = pi + 1;
+        }
+        continue;
+      }
+      if pc == 0x3F { // '?'
+        if s_bytes[si] != SEPARATOR_BYTE {
+          pi = pi + 1;
+          si = si + 1;
+          continue;
+        }
+      } else if pc == 0x5B { // '['
+        let bm = glob_bracket_match(p_bytes, pi, plen, s_bytes[si]);
+        if bm.0 {
+          pi = bm.1;
+          si = si + 1;
+          continue;
+        }
+      } else if pc == 0x5C { // '\\' — escape the next character literally.
+        if pi + 1 < plen && p_bytes[pi + 1] == s_bytes[si] {
+          pi = pi + 2;
+          si = si + 1;
+          continue;
+        }
+      } else if pc == s_bytes[si] {
+        pi = pi + 1;
+        si = si + 1;
+        continue;
+      }
+    }
+    // Mismatch — try to extend a previous star, if any.
+    if has_star {
+      // A single `*` must not cross '/'.
+      if !star_crosses_sep && s_bytes[star_si] == SEPARATOR_BYTE {
+        return false;
+      }
+      star_si = star_si + 1;
+      si = star_si;
+      // Re-anchor pi at the pattern position after the star (or `**/`).
+      let rp = star_pi;
+      if star_crosses_sep {
+        rp = rp + 2;
+        if rp < plen && p_bytes[rp] == SEPARATOR_BYTE { rp = rp + 1; }
+      } else {
+        rp = rp + 1;
+      }
+      pi = rp;
+      continue;
+    }
+    return false;
+  }
+
+  // Consume trailing `*` / `**` / `**/` in the pattern.
+  while pi < plen {
+    if p_bytes[pi] == 0x2A {
+      if pi + 1 < plen && p_bytes[pi + 1] == 0x2A {
+        pi = pi + 2;
+        if pi < plen && p_bytes[pi] == SEPARATOR_BYTE { pi = pi + 1; }
+      } else {
+        pi = pi + 1;
+      }
+      continue;
+    }
+    break;
+  }
+  return pi == plen;
 }
