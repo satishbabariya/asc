@@ -1109,6 +1109,13 @@ Type *Sema::checkPathExpr(PathExpr *e) {
           }
         }
       }
+      // Type has impls but none defined this method — reject rather than
+      // falling through to a silent nullptr (which leaves the caller to
+      // guess). Mirrors the instance-method check in checkMethodCallExpr.
+      diags.emitError(e->getLocation(), DiagID::ErrUndeclaredIdentifier,
+                      "no static method '" + segments[1] + "' on type '" +
+                      segments[0] + "'");
+      return nullptr;
     }
   }
 
