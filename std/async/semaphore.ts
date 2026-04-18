@@ -81,6 +81,37 @@ impl Semaphore {
       }
     }
   }
+
+  /// Acquire `n` permits at once, blocking until all are available.
+  /// Returns a MultiSemaphoreGuard that releases all `n` permits on drop.
+  /// The acquisition is atomic — either all `n` permits are taken together or none.
+  fn acquire_many(ref<Self>, n: usize): own<MultiSemaphoreGuard> {
+    let guard = self.count.lock();
+    while *guard < n {
+      guard = self.condvar.wait(guard);
+    }
+    *guard = *guard - n;
+    return MultiSemaphoreGuard { semaphore: self, permits: n };
+  }
+
+  /// Try to acquire `n` permits atomically without blocking.
+  /// Returns None if fewer than `n` permits are currently available.
+  fn try_acquire_many(ref<Self>, n: usize): Option<own<MultiSemaphoreGuard>> {
+    let guard = self.count.lock();
+    if *guard < n {
+      return Option::None;
+    }
+    *guard = *guard - n;
+    return Option::Some(MultiSemaphoreGuard { semaphore: self, permits: n });
+  }
+
+  /// Release `n` permits back to the semaphore.
+  fn release_many(ref<Self>, n: usize): void {
+    let guard = self.count.lock();
+    assert!(*guard + n <= self.max_permits);
+    *guard = *guard + n;
+    self.condvar.notify_all();
+  }
 }
 
 /// RAII guard that releases a semaphore permit when dropped.
@@ -91,6 +122,26 @@ struct SemaphoreGuard {
 impl Drop for SemaphoreGuard {
   fn drop(refmut<Self>): void {
     self.semaphore.release();
+  }
+}
+
+/// RAII guard that releases multiple semaphore permits when dropped.
+/// Produced by `Semaphore::acquire_many` / `try_acquire_many`.
+struct MultiSemaphoreGuard {
+  semaphore: ref<Semaphore>,
+  permits: usize,
+}
+
+impl MultiSemaphoreGuard {
+  /// Returns the number of permits held by this guard.
+  fn permits(ref<Self>): usize {
+    return self.permits;
+  }
+}
+
+impl Drop for MultiSemaphoreGuard {
+  fn drop(refmut<Self>): void {
+    self.semaphore.release_many(self.permits);
   }
 }
 
