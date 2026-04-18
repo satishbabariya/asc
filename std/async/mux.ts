@@ -127,3 +127,92 @@ enum Either<A, B> {
   Left(own<A>),
   Right(own<B>),
 }
+
+/// A source function yields successive values. Returns `None` when exhausted.
+/// This is a closure-shaped adapter so MuxAsyncIterator can be generic over
+/// heterogeneous iterators without requiring `dyn Iterator` trait objects.
+type MuxSrc<T> = own<() -> Option<own<T>>>;
+
+/// MuxAsyncIterator<T> multiplexes values from multiple iterator-like sources
+/// with fair round-robin scheduling. Inspired by Deno's `@std/async`
+/// `MuxAsyncIterator`. Each source is a closure yielding `Option<own<T>>`
+/// where `None` signals exhaustion. Exhausted sources are removed so
+/// remaining sources continue to interleave fairly. Returns `None` from
+/// `next()` once all sources are exhausted. `close()` drops all sources
+/// immediately so no further values are produced.
+struct MuxAsyncIterator<T> {
+  sources: own<Vec<MuxSrc<T>>>,
+  cursor: usize,
+  closed: bool,
+}
+
+impl<T> MuxAsyncIterator<T> {
+  /// Create an empty multiplexer.
+  fn new(): own<MuxAsyncIterator<T>> {
+    return MuxAsyncIterator {
+      sources: Vec::new(),
+      cursor: 0,
+      closed: false,
+    };
+  }
+
+  /// Register a new source. Sources yield values via their `next` closure;
+  /// returning `None` signals that source is exhausted and it will be
+  /// removed on the mux's next poll.
+  fn add(refmut<Self>, source: MuxSrc<T>): void {
+    if self.closed { return; }
+    self.sources.push(source);
+  }
+
+  /// Number of live (not-yet-exhausted, not-closed) sources.
+  fn source_count(ref<Self>): usize {
+    return self.sources.len();
+  }
+
+  /// True when no live sources remain or `close()` was called.
+  fn is_done(ref<Self>): bool {
+    return self.closed || self.sources.is_empty();
+  }
+
+  /// Return the next value from any source in fair round-robin order.
+  /// Exhausted sources are removed. Returns `None` when every source is
+  /// exhausted or the mux was closed.
+  fn next(refmut<Self>): Option<own<T>> {
+    if self.closed { return Option::None; }
+
+    // Each loop turn either yields a value (returning) or removes an
+    // exhausted source at the cursor; `attempts` bounds the sweep so we
+    // make at most one pass over the currently-live sources.
+    let attempts: usize = 0;
+    while self.sources.len() > 0 && attempts < self.sources.len() {
+      if self.cursor >= self.sources.len() { self.cursor = 0; }
+      let src = ref self.sources[self.cursor];
+      match src() {
+        Option::Some(v) => {
+          self.cursor = self.cursor + 1;
+          return Option::Some(v);
+        },
+        Option::None => {
+          // Remove the exhausted source; its successor slides into this
+          // index, so we leave the cursor where it is and charge an attempt.
+          self.sources.remove(self.cursor);
+          attempts = attempts + 1;
+        },
+      }
+    }
+
+    return Option::None;
+  }
+
+  /// Close the mux: drop all sources and refuse further values. Idempotent.
+  fn close(refmut<Self>): void {
+    self.closed = true;
+    self.sources.clear();
+  }
+}
+
+impl<T> Drop for MuxAsyncIterator<T> {
+  fn drop(refmut<Self>): void {
+    self.close();
+  }
+}
