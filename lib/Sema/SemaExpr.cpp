@@ -955,6 +955,22 @@ Type *Sema::checkMacroCallExpr(MacroCallExpr *e) {
   for (auto *arg : e->getArgs())
     checkExpr(arg);
 
+  // task.spawn requires a named function as first arg. A closure literal here
+  // would be silently dropped by HIRBuilder (no pthread_create emitted, null
+  // handle joined at runtime → segfault). Reject in Sema with a clear error.
+  // Supporting closure-literal captures end-to-end is tracked as a separate
+  // RFC-0007 work item (requires env-struct synthesis + Send validation on
+  // captured free vars).
+  if (name == "task_spawn" && !e->getArgs().empty()) {
+    if (e->getArgs()[0]->getKind() == ExprKind::Closure) {
+      diags.emitError(e->getArgs()[0]->getLocation(),
+                      DiagID::ErrUnsupportedFeature,
+                      "task.spawn does not yet support closure literals; "
+                      "pass a named function with explicit captured "
+                      "arguments instead (e.g. task.spawn(worker, x, y))");
+    }
+  }
+
   if (name == "println" || name == "print" || name == "eprintln" ||
       name == "eprint") {
     return ctx.getVoidType();

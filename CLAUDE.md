@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~85% RFC coverage. 261 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~85% RFC coverage. 295 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -179,7 +179,7 @@ defers to user-defined `Type_clone` when one exists.
 
 ## Known Gaps
 
-1. **Closure captures for task.spawn** — spawned tasks can't access parent variables (no env struct)
+1. **Closure literals in task.spawn** — rejected at Sema with a clear error (previously silently miscompiled to a null-handle join). Named-function form `task.spawn(fn, x, y)` works: captures packed into a malloc'd env struct, unpacked by the pthread wrapper. End-to-end closure-literal captures (free-var detection + Send validation + env synthesis) remain future work.
 2. **Drop flags for conditional moves** — MaybeMoved warns but no runtime flag
 3. **Wasm EH** — uses setjmp/longjmp, not Wasm exception handling proposal. catch_unwind available on native targets.
 4. **MPMC channels** — only SPSC ring buffer
