@@ -188,7 +188,7 @@ defers to user-defined `Type_clone` when one exists.
 7. **RFC-0016 JSON** — derive(Serialize/Deserialize) requires unimplemented macro expansion
 8. **RFC-0020 Async** — async/await syntax not supported in compiler (RFC-0015 §21)
 9. **Scoped threads** — thread::scope API not implemented
-10. **Unresolved-symbol permissiveness** — asc check and asc build both accept references to nonexistent types/methods without error. TDD is defanged at the tooling layer; the trait-validation negative tests previously depending on this (test/e2e/trait_*.ts) were converted to FileCheck-based assertions on the diagnostic output.
+10. **Unresolved-symbol permissiveness** — partially closed. Unknown methods on types with registered impl blocks now error with `no method 'X' on type 'T'`; unknown enum variants error with `no variant 'X' on enum 'E'`. Still permissive: unknown types surface as misleading "type mismatch" rather than a dedicated unknown-type error, and static-method paths (`Type::method`) fall through silently when the method doesn't exist.
 11. **SHA-3 runtime correctness unverified** — Keccak-f[1600] sponge implemented in std/crypto/sha3.ts and compiles cleanly into 290/290 lit tests; NIST test-vector verification awaits an execution-capable test harness.
 
 ## Testing

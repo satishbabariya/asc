@@ -459,9 +459,11 @@ Type *Sema::checkMethodCallExpr(MethodCallExpr *e) {
   if (auto *nt = dynamic_cast<NamedType *>(baseType))
     typeName = nt->getName().str();
 
+  bool typeHasImpls = false;
   if (!typeName.empty()) {
     auto it = implDecls.find(typeName);
     if (it != implDecls.end()) {
+      typeHasImpls = true;
       for (auto *impl : it->second) {
         for (auto *method : impl->getMethods()) {
           if (method->getName() == e->getMethodName()) {
@@ -492,6 +494,16 @@ Type *Sema::checkMethodCallExpr(MethodCallExpr *e) {
   // len() returns i32 for strings/vecs.
   if (e->getMethodName() == "len")
     return ctx.getBuiltinType(BuiltinTypeKind::I32);
+
+  // If the receiver is a concrete named type with registered impl blocks but
+  // none of them defined this method, reject — the name doesn't resolve to
+  // anything callable. Skip when no impls are registered (primitives, types
+  // with only extension-method access, generics awaiting monomorphization).
+  if (typeHasImpls) {
+    diags.emitError(e->getLocation(), DiagID::ErrUndeclaredIdentifier,
+                    "no method '" + e->getMethodName().str() + "' on type '" +
+                    typeName + "'");
+  }
 
   // Receiver borrow: method call on ref borrows, on refmut borrows mut.
   markExprOwnership(e->getReceiver(), OwnershipKind::Borrowed);
@@ -1067,6 +1079,20 @@ Type *Sema::checkPathExpr(PathExpr *e) {
   if (segments.size() >= 2) {
     auto it = enumDecls.find(segments[0]);
     if (it != enumDecls.end()) {
+      // Validate the variant name — previously any segment[1] was accepted,
+      // so Option::Nope typed fine and confused downstream matching.
+      bool variantFound = false;
+      for (auto *v : it->second->getVariants()) {
+        if (v->getName() == segments[1]) {
+          variantFound = true;
+          break;
+        }
+      }
+      if (!variantFound) {
+        diags.emitError(e->getLocation(), DiagID::ErrUndeclaredIdentifier,
+                        "no variant '" + segments[1] + "' on enum '" +
+                        segments[0] + "'");
+      }
       return ctx.create<NamedType>(segments[0], std::vector<Type *>{},
                                    e->getLocation());
     }
