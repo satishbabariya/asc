@@ -171,7 +171,7 @@ defers to user-defined `Type_clone` when one exists.
 | 0016 | JSON | ~35% |
 | 0017 | Collections Utils | **~65%** |
 | 0018 | Encoding/Crypto | **~75%** |
-| 0019 | Path/Config | **~72%** |
+| 0019 | Path/Config | **~80%** |
 | 0020 | Async Utilities | **~72%** |
 
 **Overall weighted: ~85%**
