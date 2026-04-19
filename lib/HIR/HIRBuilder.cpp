@@ -4770,11 +4770,11 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         // 3. Synthesize the module-level lifted func.func whose params are
         //    the captured types.
         static unsigned spawnCounter = 0;
-        unsigned myIdx = spawnCounter++;
+        unsigned closureIdx = spawnCounter++;
         std::string liftedName =
-            "__spawn_closure_" + std::to_string(myIdx);
+            "__spawn_closure_" + std::to_string(closureIdx);
         std::string wrapperName =
-            "__task_cl_" + std::to_string(myIdx) + "_wrapper";
+            "__task_cl_" + std::to_string(closureIdx) + "_wrapper";
 
         {
           mlir::OpBuilder::InsertionGuard guard(builder);
@@ -4791,8 +4791,13 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
                ++i) {
             declare(capturedNames[i], entry->getArgument(i));
           }
+          // Save/restore currentFunction so visitReturnStmt coerces against
+          // the lifted function's () -> void type, not the outer function's.
+          auto savedFn = currentFunction;
+          currentFunction = liftedFn;
           if (cl->getBody())
             visitExpr(cl->getBody());
+          currentFunction = savedFn;
           // Ensure terminator.
           auto &lastBlock = liftedFn.back();
           if (lastBlock.empty() ||
