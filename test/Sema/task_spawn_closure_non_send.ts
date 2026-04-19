@@ -1,5 +1,5 @@
 // RUN: not %asc check %s 2>&1 | FileCheck %s
-// CHECK: error:
+// CHECK: error[E006]
 // CHECK-SAME: not Send
 
 // Capturing an Rc into a spawned task must be rejected — Rc is non-atomic

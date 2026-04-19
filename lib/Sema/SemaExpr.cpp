@@ -985,7 +985,7 @@ Type *Sema::checkMacroCallExpr(MacroCallExpr *e) {
         if (!isSendType(sym->type)) {
           std::string msg = ("captured variable '" + varName.str() +
               "' is not Send; task.spawn requires Send captures");
-          diags.emitError(cl->getLocation(), DiagID::ErrTypeMismatch,
+          diags.emitError(cl->getLocation(), DiagID::ErrNonSendCaptured,
                           msg.c_str());
         }
       }
