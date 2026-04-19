@@ -150,6 +150,13 @@ private:
   /// Emit a function body.
   void emitFunctionBody(FunctionDecl *d, mlir::func::FuncOp funcOp);
 
+  /// Lower `task.spawn(closure-literal)` by lifting the closure body into
+  /// a module-level __spawn_closure_N function and emitting the existing
+  /// env-struct + pthread_create sequence. Called from visitMacroCallExpr
+  /// when the task_spawn first arg is a ClosureExpr.
+  /// Returns the tidAlloca (a pointer to the pthread_t handle).
+  mlir::Value emitSpawnClosure(ClosureExpr *cl, mlir::Location location);
+
   // ---- State ----
   mlir::MLIRContext &mlirCtx;
   [[maybe_unused]] ASTContext &astCtx;
