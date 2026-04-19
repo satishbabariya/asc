@@ -1,4 +1,5 @@
 #include "asc/Analysis/FreeVars.h"
+#include "asc/AST/Decl.h"
 #include "asc/AST/Expr.h"
 #include "asc/AST/Stmt.h"
 
@@ -41,9 +42,30 @@ void collectFreeVars(Expr *expr, const llvm::StringSet<> &boundNames,
   }
   if (auto *block = dynamic_cast<BlockExpr *>(expr)) {
     if (block->getBlock()) {
+      // A block introduces a scope: walk statements in order, growing a
+      // local bound-name set as `let` bindings are encountered so that
+      // subsequent references to those names are NOT treated as free.
+      // Note: destructuring `let (a, b) = ...` patterns are not yet
+      // handled; only the common single-identifier case.
+      llvm::StringSet<> localBound;
+      for (const auto &entry : boundNames)
+        localBound.insert(entry.getKey());
       for (auto *stmt : block->getBlock()->getStmts()) {
-        if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
-          collectFreeVars(exprStmt->getExpr(), boundNames, freeVars);
+        if (auto *ls = dynamic_cast<LetStmt *>(stmt)) {
+          // The initializer is evaluated before the binding comes into
+          // scope, so collect its free vars against the *current*
+          // localBound (excluding the new name).
+          if (auto *decl = ls->getDecl()) {
+            if (decl->getInit())
+              collectFreeVars(decl->getInit(), localBound, freeVars);
+            // Bind the declared name for subsequent statements. Skip
+            // destructuring patterns for now (handled separately).
+            if (!decl->getPattern() && !decl->getName().empty())
+              localBound.insert(decl->getName());
+          }
+        } else if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt)) {
+          collectFreeVars(exprStmt->getExpr(), localBound, freeVars);
+        }
       }
     }
     return;
