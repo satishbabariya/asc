@@ -1,9 +1,9 @@
 // RUN: %asc check %s 2>&1 | FileCheck %s --allow-empty
-// CHECK-NOT: error
+// CHECK-NOT: error:
+// CHECK-NOT: not Send
 
-// Primitive captures are trivially Send — the canonical positive case.
-// Today this is rejected by Sema (see spawn_closure_literal_rejected.ts);
-// once closure-literal captures are implemented, this test should pass.
+// Primitive captures are trivially Send — the canonical positive case
+// for closure-literal task.spawn (RFC-0007).
 function main(): i32 {
   let x: i32 = 42;
   let h = task.spawn(() => {

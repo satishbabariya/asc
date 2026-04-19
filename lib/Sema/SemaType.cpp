@@ -203,6 +203,9 @@ bool Sema::isSendType(Type *t) {
 
   // Named types: check @send attribute or all fields Send.
   if (auto *nt = dynamic_cast<NamedType *>(t)) {
+    // Rc<T> is non-atomic refcounted and fundamentally not Send.
+    if (nt->getName() == "Rc")
+      return false;
     auto it = structDecls.find(nt->getName());
     if (it != structDecls.end()) {
       for (const auto &attr : it->second->getAttributes()) {
