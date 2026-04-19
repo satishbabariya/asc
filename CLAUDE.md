@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **asc** is an AssemblyScript compiler built on LLVM 18, using MLIR as the HIR layer, with a Rust-inspired ownership model. No garbage collector. All LLVM targets supported. Primary target: `wasm32-wasi-threads`.
 
-**Status:** Implementation complete at ~85% RFC coverage. 295 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
+**Status:** Implementation complete at ~86% RFC coverage. 313 lit tests at 100%. 75 std library files (34,200+ LOC). 30 Sema-registered traits. Builds on arm64 macOS with Homebrew LLVM 18. Wasm e2e validated on wasmtime.
 
 ## Repository Structure
 
@@ -160,7 +160,7 @@ defers to user-defined `Type_clone` when one exists.
 | 0004 | Target Support | **~86%** |
 | 0005 | Ownership Model | **~88%** |
 | 0006 | Borrow Checker | **~83%** |
-| 0007 | Concurrency | **~48%** |
+| 0007 | Concurrency | **~58%** |
 | 0008 | Memory Model | **~68%** |
 | 0009 | Panic/Unwind | **~65%** |
 | 0010 | Toolchain/DX | **~80%** |
@@ -175,11 +175,11 @@ defers to user-defined `Type_clone` when one exists.
 | 0019 | Path/Config | **~80%** |
 | 0020 | Async Utilities | **~72%** |
 
-**Overall weighted: ~85%**
+**Overall weighted: ~86%**
 
 ## Known Gaps
 
-1. **Closure literals in task.spawn** — rejected at Sema with a clear error (previously silently miscompiled to a null-handle join). Named-function form `task.spawn(fn, x, y)` works: captures packed into a malloc'd env struct, unpacked by the pthread wrapper. End-to-end closure-literal captures (free-var detection + Send validation + env synthesis) remain future work.
+1. **Closure literals in task.spawn** — supported. Sema collects free variables from the closure body and validates each capture's type against the Send marker (`Rc`/`Weak` rejected); HIRBuilder lifts the body to a synthesized `__spawn_closure_N` func and reuses the env-struct packing path shared with the named-function form. `thread::scope` with lifetime-bounded borrows is still deferred to RFC-0007 Phase 6.
 2. **Drop flags for conditional moves** — MaybeMoved warns but no runtime flag
 3. **Wasm EH** — uses setjmp/longjmp, not Wasm exception handling proposal. catch_unwind available on native targets.
 4. **MPMC channels** — only SPSC ring buffer

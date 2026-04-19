@@ -1,4 +1,5 @@
 #include "asc/Sema/Sema.h"
+#include "asc/Analysis/FreeVars.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 
@@ -967,19 +968,27 @@ Type *Sema::checkMacroCallExpr(MacroCallExpr *e) {
   for (auto *arg : e->getArgs())
     checkExpr(arg);
 
-  // task.spawn requires a named function as first arg. A closure literal here
-  // would be silently dropped by HIRBuilder (no pthread_create emitted, null
-  // handle joined at runtime → segfault). Reject in Sema with a clear error.
-  // Supporting closure-literal captures end-to-end is tracked as a separate
-  // RFC-0007 work item (requires env-struct synthesis + Send validation on
-  // captured free vars).
+  // task.spawn: closure-literal first arg permitted; each captured free
+  // variable's type must be Send (RFC-0007). A non-closure first arg
+  // (named function) is validated by the existing multi-arg spawn path.
   if (name == "task_spawn" && !e->getArgs().empty()) {
-    if (e->getArgs()[0]->getKind() == ExprKind::Closure) {
-      diags.emitError(e->getArgs()[0]->getLocation(),
-                      DiagID::ErrUnsupportedFeature,
-                      "task.spawn does not yet support closure literals; "
-                      "pass a named function with explicit captured "
-                      "arguments instead (e.g. task.spawn(worker, x, y))");
+    if (auto *cl = dynamic_cast<ClosureExpr *>(e->getArgs()[0])) {
+      llvm::StringSet<> boundNames;
+      for (const auto &p : cl->getParams())
+        boundNames.insert(p.name);
+      llvm::StringSet<> freeVars;
+      asc::collectFreeVars(cl->getBody(), boundNames, freeVars);
+      for (const auto &entry : freeVars) {
+        llvm::StringRef varName = entry.getKey();
+        Symbol *sym = currentScope ? currentScope->lookup(varName) : nullptr;
+        if (!sym || !sym->type) continue;  // unresolved — later passes error
+        if (!isSendType(sym->type)) {
+          std::string msg = ("captured variable '" + varName.str() +
+              "' is not Send; task.spawn requires Send captures");
+          diags.emitError(cl->getLocation(), DiagID::ErrNonSendCaptured,
+                          msg.c_str());
+        }
+      }
     }
   }
 

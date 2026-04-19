@@ -1,4 +1,5 @@
 #include "asc/HIR/HIRBuilder.h"
+#include "asc/Analysis/FreeVars.h"
 #include "asc/Basic/SourceManager.h"
 #include "llvm/ADT/StringSet.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -3677,67 +3678,6 @@ mlir::Value HIRBuilder::visitCastExpr(CastExpr *e) {
   return operand;
 }
 
-// Collect all DeclRefExpr names from an expression tree.
-static void collectFreeVars(Expr *expr, llvm::StringSet<> &paramNames,
-                            llvm::StringSet<> &freeVars) {
-  if (!expr)
-    return;
-  if (auto *ref = dynamic_cast<DeclRefExpr *>(expr)) {
-    if (!paramNames.contains(ref->getName()))
-      freeVars.insert(ref->getName());
-    return;
-  }
-  if (auto *bin = dynamic_cast<BinaryExpr *>(expr)) {
-    collectFreeVars(bin->getLHS(), paramNames, freeVars);
-    collectFreeVars(bin->getRHS(), paramNames, freeVars);
-    return;
-  }
-  if (auto *un = dynamic_cast<UnaryExpr *>(expr)) {
-    collectFreeVars(un->getOperand(), paramNames, freeVars);
-    return;
-  }
-  if (auto *call = dynamic_cast<CallExpr *>(expr)) {
-    collectFreeVars(call->getCallee(), paramNames, freeVars);
-    for (auto *arg : call->getArgs())
-      collectFreeVars(arg, paramNames, freeVars);
-    return;
-  }
-  if (auto *ifE = dynamic_cast<IfExpr *>(expr)) {
-    collectFreeVars(ifE->getCondition(), paramNames, freeVars);
-    if (ifE->getThenBlock()) {
-      for (auto *stmt : ifE->getThenBlock()->getStmts()) {
-        if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
-          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
-      }
-    }
-    return;
-  }
-  if (auto *block = dynamic_cast<BlockExpr *>(expr)) {
-    if (block->getBlock()) {
-      for (auto *stmt : block->getBlock()->getStmts()) {
-        if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
-          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
-      }
-    }
-    return;
-  }
-  if (auto *paren = dynamic_cast<ParenExpr *>(expr)) {
-    collectFreeVars(paren->getInner(), paramNames, freeVars);
-    return;
-  }
-  if (auto *ts = dynamic_cast<TaskScopeExpr *>(expr)) {
-    if (ts->getBody()) {
-      for (auto *stmt : ts->getBody()->getStmts()) {
-        if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
-          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
-      }
-    }
-    return;
-  }
-  // For other expression types, the current level of capture analysis
-  // is sufficient — if more complex closures are needed, extend here.
-}
-
 mlir::Value HIRBuilder::visitClosureExpr(ClosureExpr *e) {
   auto location = loc(e->getLocation());
 
@@ -3754,7 +3694,7 @@ mlir::Value HIRBuilder::visitClosureExpr(ClosureExpr *e) {
   for (const auto &param : e->getParams())
     paramNames.insert(param.name);
   llvm::StringSet<> freeVarNames;
-  collectFreeVars(e->getBody(), paramNames, freeVarNames);
+  asc::collectFreeVars(e->getBody(), paramNames, freeVarNames);
 
   // Resolve each free variable from the current scope.
   // For alloca-backed mutable variables, load the value before capturing.
@@ -4782,6 +4722,204 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
   // Supports 0, 1, or N captured arguments via closure env struct (RFC-0007).
   if (name == "task_spawn") {
     if (!e->getArgs().empty()) {
+      // RFC-0007 Phase 1 Task 5: closure-literal first arg.
+      // Lift the closure body into a module-level `func.func` whose params
+      // are the captured free-vars, then emit the same pthread_create +
+      // env-struct sequence that the named-fn path uses.
+      if (auto *cl = dynamic_cast<ClosureExpr *>(e->getArgs()[0])) {
+        auto ptrType = getPtrType();
+        auto i32Type = builder.getIntegerType(32);
+        auto i64Type = builder.getIntegerType(64);
+
+        // 1. Collect free vars (deterministic via sort).
+        llvm::StringSet<> paramNames;
+        for (const auto &p : cl->getParams())
+          paramNames.insert(p.name);
+        llvm::StringSet<> freeSet;
+        asc::collectFreeVars(cl->getBody(), paramNames, freeSet);
+        llvm::SmallVector<std::string> freeVars;
+        for (auto &entry : freeSet)
+          freeVars.push_back(entry.getKey().str());
+        std::sort(freeVars.begin(), freeVars.end());
+
+        // 2. Resolve free vars in current scope. Load alloca-backed scalars
+        //    so we capture the *value* at spawn time (same pattern as
+        //    visitClosureExpr for consistency).
+        llvm::SmallVector<mlir::Value> capturedVals;
+        llvm::SmallVector<mlir::Type> capturedTypes;
+        llvm::SmallVector<std::string> capturedNames;
+        for (const auto &vn : freeVars) {
+          mlir::Value v = lookup(vn);
+          if (!v) continue;
+          if (mlir::isa<mlir::LLVM::LLVMPointerType>(v.getType())) {
+            if (auto *defOp = v.getDefiningOp()) {
+              if (auto alc = mlir::dyn_cast<mlir::LLVM::AllocaOp>(defOp)) {
+                mlir::Type et = alc.getElemType();
+                if (et && (et.isIntOrIndexOrFloat() ||
+                           mlir::isa<mlir::LLVM::LLVMPointerType>(et))) {
+                  v = builder.create<mlir::LLVM::LoadOp>(location, et, v);
+                }
+              }
+            }
+          }
+          capturedVals.push_back(v);
+          capturedTypes.push_back(v.getType());
+          capturedNames.push_back(vn);
+        }
+
+        // 3. Synthesize the module-level lifted func.func whose params are
+        //    the captured types.
+        static unsigned spawnCounter = 0;
+        unsigned closureIdx = spawnCounter++;
+        std::string liftedName =
+            "__spawn_closure_" + std::to_string(closureIdx);
+        std::string wrapperName =
+            "__task_cl_" + std::to_string(closureIdx) + "_wrapper";
+
+        {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToEnd(module.getBody());
+          auto fnTy = builder.getFunctionType(capturedTypes, {});
+          auto liftedFn = mlir::func::FuncOp::create(
+              location, liftedName, fnTy);
+          module.push_back(liftedFn);
+          auto *entry = liftedFn.addEntryBlock();
+          builder.setInsertionPointToStart(entry);
+          pushScope();
+          for (size_t i = 0;
+               i < capturedNames.size() && i < entry->getNumArguments();
+               ++i) {
+            declare(capturedNames[i], entry->getArgument(i));
+          }
+          // Save/restore currentFunction so visitReturnStmt coerces against
+          // the lifted function's () -> void type, not the outer function's.
+          auto savedFn = currentFunction;
+          currentFunction = liftedFn;
+          if (cl->getBody())
+            visitExpr(cl->getBody());
+          currentFunction = savedFn;
+          // Ensure terminator.
+          auto &lastBlock = liftedFn.back();
+          if (lastBlock.empty() ||
+              !lastBlock.back().hasTrait<mlir::OpTrait::IsTerminator>()) {
+            builder.setInsertionPointToEnd(&lastBlock);
+            builder.create<mlir::func::ReturnOp>(location);
+          }
+          popScope();
+        }
+
+        // 4. Synthesize the pthread wrapper: ptr __task_cl_N_wrapper(ptr).
+        {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToEnd(module.getBody());
+          auto wrapperFnType =
+              mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType});
+          auto wrapperFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+              location, wrapperName, wrapperFnType);
+          auto *wEntry = wrapperFn.addEntryBlock();
+          builder.setInsertionPointToStart(wEntry);
+
+          auto liftedCallee =
+              module.lookupSymbol<mlir::func::FuncOp>(liftedName);
+          if (liftedCallee && !capturedTypes.empty()) {
+            auto envStructTy = mlir::LLVM::LLVMStructType::getLiteral(
+                builder.getContext(), capturedTypes, /*isPacked=*/true);
+            mlir::Value envPtr = wEntry->getArgument(0);
+            llvm::SmallVector<mlir::Value> callArgs;
+            for (unsigned i = 0; i < capturedTypes.size(); ++i) {
+              auto idx = builder.create<mlir::LLVM::ConstantOp>(
+                  location, i32Type, static_cast<int64_t>(i));
+              auto zero = builder.create<mlir::LLVM::ConstantOp>(
+                  location, i32Type, static_cast<int64_t>(0));
+              auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+                  location, ptrType, envStructTy, envPtr,
+                  mlir::ValueRange{zero, idx});
+              auto val = builder.create<mlir::LLVM::LoadOp>(
+                  location, capturedTypes[i], fieldPtr);
+              callArgs.push_back(val);
+            }
+            builder.create<mlir::func::CallOp>(
+                location, liftedCallee, mlir::ValueRange(callArgs));
+          } else if (liftedCallee) {
+            builder.create<mlir::func::CallOp>(
+                location, liftedCallee, mlir::ValueRange{});
+          }
+          auto nullRet =
+              builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+          builder.create<mlir::LLVM::ReturnOp>(
+              location, mlir::ValueRange{nullRet});
+        }
+
+        // 5. Declare pthread_create, alloca pthread_t, malloc env, pack
+        //    captures, call pthread_create.
+        auto pthreadCreateFn =
+            module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_create");
+        if (!pthreadCreateFn) {
+          mlir::OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(module.getBody());
+          auto fnType = mlir::LLVM::LLVMFunctionType::get(
+              i32Type, {ptrType, ptrType, ptrType, ptrType});
+          pthreadCreateFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+              location, "pthread_create", fnType);
+        }
+
+        auto i64One = builder.create<mlir::LLVM::ConstantOp>(
+            location, i64Type, static_cast<int64_t>(1));
+        auto tidAlloca = builder.create<mlir::LLVM::AllocaOp>(
+            location, ptrType, i64Type, i64One);
+        auto wrapperAddr = builder.create<mlir::LLVM::AddressOfOp>(
+            location, ptrType, wrapperName);
+
+        mlir::Value threadArg;
+        if (!capturedVals.empty()) {
+          auto envStructTy = mlir::LLVM::LLVMStructType::getLiteral(
+              builder.getContext(), capturedTypes, /*isPacked=*/true);
+          uint64_t totalSize = 0;
+          for (auto t : capturedTypes)
+            totalSize += getTypeSize(t);
+          if (totalSize == 0) totalSize = 8;
+          auto mallocFn =
+              module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("malloc");
+          if (!mallocFn) {
+            mlir::OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(module.getBody());
+            auto fnType =
+                mlir::LLVM::LLVMFunctionType::get(ptrType, {i64Type});
+            mallocFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+                location, "malloc", fnType);
+          }
+          auto sizeConst = builder.create<mlir::LLVM::ConstantOp>(
+              location, i64Type, static_cast<int64_t>(totalSize));
+          threadArg = builder.create<mlir::LLVM::CallOp>(
+              location, mallocFn, mlir::ValueRange{sizeConst}).getResult();
+          for (unsigned i = 0; i < capturedVals.size(); ++i) {
+            auto idx = builder.create<mlir::LLVM::ConstantOp>(
+                location, i32Type, static_cast<int64_t>(i));
+            auto zero = builder.create<mlir::LLVM::ConstantOp>(
+                location, i32Type, static_cast<int64_t>(0));
+            auto fieldPtr = builder.create<mlir::LLVM::GEPOp>(
+                location, ptrType, envStructTy, threadArg,
+                mlir::ValueRange{zero, idx});
+            builder.create<mlir::LLVM::StoreOp>(
+                location, capturedVals[i], fieldPtr);
+          }
+        } else {
+          threadArg =
+              builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+        }
+
+        auto nullAttr =
+            builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+        builder.create<mlir::LLVM::CallOp>(
+            location, pthreadCreateFn,
+            mlir::ValueRange{tidAlloca, nullAttr, wrapperAddr, threadArg});
+
+        if (!taskScopeHandleStack.empty())
+          taskScopeHandleStack.back().push_back(tidAlloca);
+
+        return tidAlloca;
+      }
+
       // Get closure function name directly from AST to avoid emitting
       // an llvm.addressof for a func.func (which fails MLIR verification).
       std::string closureFnName;

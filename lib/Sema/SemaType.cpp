@@ -203,6 +203,13 @@ bool Sema::isSendType(Type *t) {
 
   // Named types: check @send attribute or all fields Send.
   if (auto *nt = dynamic_cast<NamedType *>(t)) {
+    // Rc<T> and Weak<T> (non-atomic refcounted) are fundamentally not Send.
+    // Match both the bare generic name and monomorphized forms (e.g.
+    // "Rc_i32", "Weak_Foo") produced by Sema::monomorphizeType.
+    llvm::StringRef typeName = nt->getName();
+    if (typeName == "Rc" || typeName.starts_with("Rc_") ||
+        typeName == "Weak" || typeName.starts_with("Weak_"))
+      return false;
     auto it = structDecls.find(nt->getName());
     if (it != structDecls.end()) {
       for (const auto &attr : it->second->getAttributes()) {
