@@ -5,36 +5,36 @@
 namespace asc {
 
 // Collect all DeclRefExpr names from an expression tree.
-void collectFreeVars(Expr *expr, const llvm::StringSet<> &paramNames,
+void collectFreeVars(Expr *expr, const llvm::StringSet<> &boundNames,
                      llvm::StringSet<> &freeVars) {
   if (!expr)
     return;
   if (auto *ref = dynamic_cast<DeclRefExpr *>(expr)) {
-    if (!paramNames.contains(ref->getName()))
+    if (!boundNames.contains(ref->getName()))
       freeVars.insert(ref->getName());
     return;
   }
   if (auto *bin = dynamic_cast<BinaryExpr *>(expr)) {
-    collectFreeVars(bin->getLHS(), paramNames, freeVars);
-    collectFreeVars(bin->getRHS(), paramNames, freeVars);
+    collectFreeVars(bin->getLHS(), boundNames, freeVars);
+    collectFreeVars(bin->getRHS(), boundNames, freeVars);
     return;
   }
   if (auto *un = dynamic_cast<UnaryExpr *>(expr)) {
-    collectFreeVars(un->getOperand(), paramNames, freeVars);
+    collectFreeVars(un->getOperand(), boundNames, freeVars);
     return;
   }
   if (auto *call = dynamic_cast<CallExpr *>(expr)) {
-    collectFreeVars(call->getCallee(), paramNames, freeVars);
+    collectFreeVars(call->getCallee(), boundNames, freeVars);
     for (auto *arg : call->getArgs())
-      collectFreeVars(arg, paramNames, freeVars);
+      collectFreeVars(arg, boundNames, freeVars);
     return;
   }
   if (auto *ifE = dynamic_cast<IfExpr *>(expr)) {
-    collectFreeVars(ifE->getCondition(), paramNames, freeVars);
+    collectFreeVars(ifE->getCondition(), boundNames, freeVars);
     if (ifE->getThenBlock()) {
       for (auto *stmt : ifE->getThenBlock()->getStmts()) {
         if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
-          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
+          collectFreeVars(exprStmt->getExpr(), boundNames, freeVars);
       }
     }
     return;
@@ -43,20 +43,20 @@ void collectFreeVars(Expr *expr, const llvm::StringSet<> &paramNames,
     if (block->getBlock()) {
       for (auto *stmt : block->getBlock()->getStmts()) {
         if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
-          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
+          collectFreeVars(exprStmt->getExpr(), boundNames, freeVars);
       }
     }
     return;
   }
   if (auto *paren = dynamic_cast<ParenExpr *>(expr)) {
-    collectFreeVars(paren->getInner(), paramNames, freeVars);
+    collectFreeVars(paren->getInner(), boundNames, freeVars);
     return;
   }
   if (auto *ts = dynamic_cast<TaskScopeExpr *>(expr)) {
     if (ts->getBody()) {
       for (auto *stmt : ts->getBody()->getStmts()) {
         if (auto *exprStmt = dynamic_cast<ExprStmt *>(stmt))
-          collectFreeVars(exprStmt->getExpr(), paramNames, freeVars);
+          collectFreeVars(exprStmt->getExpr(), boundNames, freeVars);
       }
     }
     return;
