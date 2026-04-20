@@ -1097,7 +1097,6 @@ mlir::Value HIRBuilder::visitCallExpr(CallExpr *e) {
         auto i32Type = builder.getIntegerType(32);
 
         // Generate wrapper: ptr __catch_N_wrapper(ptr arg) { call fn(); return null; }
-        static unsigned catchCounter = 0;
         std::string wrapperName = "__catch_" + std::to_string(catchCounter++) + "_wrapper";
 
         auto savedIP = builder.saveInsertionPoint();
@@ -3722,8 +3721,7 @@ mlir::Value HIRBuilder::emitSpawnClosure(ClosureExpr *cl,
 
   // 3. Synthesize the module-level lifted func.func whose params are
   //    the captured types.
-  static unsigned spawnCounter = 0;
-  unsigned closureIdx = spawnCounter++;
+  unsigned closureIdx = spawnClosureCounter++;
   std::string liftedName =
       "__spawn_closure_" + std::to_string(closureIdx);
   std::string wrapperName =
@@ -3916,7 +3914,6 @@ mlir::Value HIRBuilder::visitClosureExpr(ClosureExpr *e) {
   }
 
   // --- Build closure function ---
-  static unsigned closureCounter = 0;
   std::string closureName = "__closure_" + std::to_string(closureCounter++);
   std::string closureFnName = closureName + "_fn";
 
@@ -4941,8 +4938,7 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         auto i64Type = builder.getIntegerType(64);
 
         // Generate pthread-compatible wrapper: ptr __task_N_wrapper(ptr arg)
-        static unsigned taskCounter = 0;
-        std::string wrapperName = "__task_" + std::to_string(taskCounter++) + "_wrapper";
+        std::string wrapperName = "__task_" + std::to_string(taskWrapperCounter++) + "_wrapper";
 
         auto savedIP = builder.saveInsertionPoint();
         builder.setInsertionPointToEnd(module.getBody());

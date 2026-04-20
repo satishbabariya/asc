@@ -205,6 +205,13 @@ private:
   /// When non-empty, task_spawn results are pushed onto the top vector
   /// so that task.scope can auto-join them at block exit.
   std::vector<llvm::SmallVector<mlir::Value>> taskScopeHandleStack;
+
+  /// Monotonic counters for synthesizing unique symbol names. Reset on each
+  /// HIRBuilder construction so LSP re-lowerings produce deterministic names.
+  unsigned closureCounter = 0;
+  unsigned spawnClosureCounter = 0;
+  unsigned taskWrapperCounter = 0;
+  unsigned catchCounter = 0;
 };
 
 } // namespace asc
