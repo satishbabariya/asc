@@ -202,19 +202,19 @@ stack_ptr = arena.alloc(static_stack_size)
 
 ### Step 4 — Start thread
 
-```wasm
-local.get $thread_fn_ptr    ;; pointer to emitted task entry function
-local.get $closure_ptr
-call $wasi_thread_start     ;; imported WASI function
-local.set $thread_id
-```
+The compiler emits a runtime call to `__asc_wasi_thread_spawn(entry_fn_ptr, closure_ptr)`
+provided by `lib/Runtime/wasi_thread_rt.c`. That helper internally:
 
-The task entry function (`thread_fn_ptr`) is a compiler-emitted Wasm function that:
-1. Unpacks the closure struct
-2. Executes the task body with the unpacked captures
-3. Writes the result into `closure.result`
-4. Sets `closure.done_flag` to 1 (atomic store, release)
-5. Calls `memory.atomic.notify` on `done_flag` to wake the joiner
+  1. Allocates an `asc_wasi_task` struct (captures `entry`, `arg`, a `done_flag`).
+  2. Calls the imported host function
+     `wasi:thread-spawn/thread-spawn(start_arg: i32) -> i32`
+     (the wasi-threads proposal import), returning the thread id.
+  3. Returns a handle to the caller.
+
+The module also **exports** `wasi_thread_start(tid: i32, closure_ptr: i32) -> void` —
+the host runtime invokes this on the newly-spawned thread. Its body unpacks the
+closure, runs the task body, atomically flips `done_flag`, and calls
+`memory.atomic.notify` on the flag to wake any joiner.
 
 ### Step 5 — Return handle
 
@@ -240,6 +240,13 @@ memory.copy
 local.get $closure_ptr
 call $arena_free
 ```
+
+**Phase 2 implementation note:** `task.join` is currently lowered to a runtime
+call `__asc_wasi_thread_join(handle)` which busy-spins on the done_flag via a
+volatile load. `memory.atomic.wait32` + `memory.atomic.notify` are the intended
+primitives but trigger an unaligned-atomic trap in wasmtime 43 even when the
+address is 4-byte aligned. Replacing the busy-spin with futex-style wait is
+tracked in Phase 5 (see wasi_thread_rt.c).
 
 ## Static Stack Size Analysis
 
