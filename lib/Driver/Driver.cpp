@@ -21,6 +21,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
@@ -1117,54 +1118,95 @@ ExitCode Driver::linkWasm(const std::string &objFile,
     return ExitCode::SystemError;
   }
 
-  // Compile the runtime to a temp object file if clang and runtime.c are found.
-  std::string runtimeObj;
+  // Detect the threads feature from the target triple. LLVM-18 splits
+  // `wasm32-wasi-threads` inconsistently (sometimes OS=wasi Env=threads,
+  // sometimes OS=wasi-threads Env=empty), so look in both fields.
+  llvm::Triple triple(opts.targetTriple);
+  bool threadsEnabled =
+      triple.getEnvironmentName().contains("threads") ||
+      triple.getOSName().contains("threads");
+
+  // Compile the runtime to temp object files if clang is found. Threads-
+  // enabled builds additionally compile wasi_thread_rt.c and atomics.c.
+  llvm::SmallVector<std::string, 4> runtimeObjs;
   auto clangPath = llvm::sys::findProgramByName("clang");
   if (clangPath) {
-    // Look for runtime.c in common locations relative to the working directory.
-    std::string runtimeSrc;
-    for (const char *p : {"lib/Runtime/runtime.c",
-                          "../lib/Runtime/runtime.c",
-                          "../../lib/Runtime/runtime.c"}) {
-      if (llvm::sys::fs::exists(p)) { runtimeSrc = p; break; }
+    llvm::SmallVector<std::string, 4> runtimeSources;
+    runtimeSources.push_back("lib/Runtime/runtime.c");
+    if (threadsEnabled) {
+      runtimeSources.push_back("lib/Runtime/wasi_thread_rt.c");
+      runtimeSources.push_back("lib/Runtime/atomics.c");
     }
-    if (!runtimeSrc.empty()) {
-      runtimeObj = outFile + ".rt.o";
-      llvm::SmallVector<llvm::StringRef, 8> clangArgs;
-      clangArgs.push_back(*clangPath);
-      clangArgs.push_back("--target=wasm32-wasi");
-      clangArgs.push_back("-c");
-      clangArgs.push_back(runtimeSrc);
-      clangArgs.push_back("-o");
-      clangArgs.push_back(runtimeObj);
-      std::string clangErr;
-      int clangRc = llvm::sys::ExecuteAndWait(
-          *clangPath, clangArgs, std::nullopt, {}, 60, 0, &clangErr);
-      if (clangRc != 0) {
+
+    for (const auto &src : runtimeSources) {
+      std::string resolved;
+      for (const char *prefix : {"", "../", "../../"}) {
+        std::string candidate = std::string(prefix) + src;
+        if (llvm::sys::fs::exists(candidate)) {
+          resolved = candidate;
+          break;
+        }
+      }
+      if (resolved.empty()) {
         if (opts.verbose)
-          llvm::errs() << "  [warn] failed to compile runtime: " << clangErr << "\n";
-        runtimeObj.clear();
+          llvm::errs() << "  [warn] runtime source not found: " << src << "\n";
+        continue;
+      }
+
+      std::string obj =
+          outFile + "." + llvm::sys::path::stem(src).str() + ".o";
+      llvm::SmallVector<llvm::StringRef, 12> cargs;
+      cargs.push_back(*clangPath);
+      cargs.push_back(threadsEnabled ? "--target=wasm32-wasi-threads"
+                                     : "--target=wasm32-wasi");
+      if (threadsEnabled) {
+        cargs.push_back("-pthread");
+        cargs.push_back("-matomics");
+        cargs.push_back("-mbulk-memory");
+      }
+      cargs.push_back("-c");
+      cargs.push_back(resolved);
+      cargs.push_back("-I");
+      cargs.push_back("include");
+      cargs.push_back("-o");
+      cargs.push_back(obj);
+
+      std::string cerr;
+      int crc = llvm::sys::ExecuteAndWait(
+          *clangPath, cargs, std::nullopt, {}, 60, 0, &cerr);
+      if (crc == 0) {
+        runtimeObjs.push_back(obj);
+      } else if (opts.verbose) {
+        llvm::errs() << "  [warn] failed to compile " << resolved << ": "
+                     << cerr << "\n";
       }
     }
   }
 
   // Build argument list for wasm-ld.
-  llvm::SmallVector<llvm::StringRef, 12> args;
+  llvm::SmallVector<llvm::StringRef, 16> args;
   args.push_back(*wasmLdPath);
   args.push_back(objFile);
-  if (!runtimeObj.empty())
-    args.push_back(runtimeObj);
+  for (const auto &o : runtimeObjs)
+    args.push_back(o);
   args.push_back("-o");
   args.push_back(outFile);
   // Use --export=_start when runtime is linked (provides _start entry).
   // Fall back to --no-entry --export-all when no runtime.
-  if (!runtimeObj.empty()) {
+  if (!runtimeObjs.empty()) {
     args.push_back("--export=_start");
   } else {
     args.push_back("--no-entry");
     args.push_back("--export-all");
   }
   args.push_back("--allow-undefined");
+  if (threadsEnabled) {
+    args.push_back("--shared-memory");
+    args.push_back("--import-memory");
+    args.push_back("--max-memory=67108864"); // 64 MiB default
+    args.push_back("--export=wasi_thread_start");
+    args.push_back("--no-check-features");
+  }
 
   if (opts.verbose) {
     llvm::errs() << "  [link] ";
@@ -1176,9 +1218,9 @@ ExitCode Driver::linkWasm(const std::string &objFile,
   int rc = llvm::sys::ExecuteAndWait(*wasmLdPath, args,
                                      std::nullopt, {}, 60, 0, &errMsg);
 
-  // Clean up runtime temp object.
-  if (!runtimeObj.empty())
-    std::remove(runtimeObj.c_str());
+  // Clean up runtime temp objects.
+  for (const auto &o : runtimeObjs)
+    std::remove(o.c_str());
 
   if (rc != 0) {
     llvm::errs() << "error: wasm-ld failed";
