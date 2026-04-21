@@ -109,12 +109,20 @@ void ConcurrencyLoweringPass::declareWasiThreadsFunctions(mlir::ModuleOp module)
   builder.setInsertionPointToStart(module.getBody());
   auto loc = builder.getUnknownLoc();
   auto ptrType = mlir::LLVM::LLVMPointerType::get(module.getContext());
-  auto i32Type = mlir::IntegerType::get(module.getContext(), 32);
   auto voidTy = mlir::LLVM::LLVMVoidType::get(module.getContext());
 
-  if (!module.lookupSymbol("wasi_thread_start")) {
-    auto ty = mlir::LLVM::LLVMFunctionType::get(voidTy, {i32Type, ptrType});
-    builder.create<mlir::LLVM::LLVMFuncOp>(loc, "wasi_thread_start", ty);
+  // Runtime helpers defined in lib/Runtime/wasi_thread_rt.c. HIRBuilder calls
+  // these from the Wasm-target task.spawn / task.join lowering path. The
+  // exported `wasi_thread_start` entrypoint lives inside wasi_thread_rt.c —
+  // user code never calls it directly, so no declaration is needed here.
+  if (!module.lookupSymbol("__asc_wasi_thread_spawn")) {
+    auto ty = mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, ptrType});
+    builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_wasi_thread_spawn", ty);
+  }
+
+  if (!module.lookupSymbol("__asc_wasi_thread_join")) {
+    auto ty = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+    builder.create<mlir::LLVM::LLVMFuncOp>(loc, "__asc_wasi_thread_join", ty);
   }
 }
 
