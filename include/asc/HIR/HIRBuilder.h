@@ -175,6 +175,15 @@ private:
   /// Returns the tidAlloca (a pointer to the pthread_t handle).
   mlir::Value emitSpawnClosure(ClosureExpr *cl, mlir::Location location);
 
+  /// Emit the Wasm-target `__asc_wasi_thread_spawn(wrapper, env)` call and
+  /// store its asc_wasi_task* result into `tidAlloca`. Reuses the caller's
+  /// tidAlloca slot so task_join's uniform `load ptr, %handle` dispatch works
+  /// unchanged across backends (see RFC-0007 Phase 2 Task 6).
+  mlir::Value emitWasmThreadSpawn(mlir::Location loc,
+                                  mlir::Value wrapperAddr,
+                                  mlir::Value threadArg,
+                                  mlir::Value tidAlloca);
+
   // ---- State ----
   mlir::MLIRContext &mlirCtx;
   [[maybe_unused]] ASTContext &astCtx;

@@ -3677,6 +3677,33 @@ mlir::Value HIRBuilder::visitCastExpr(CastExpr *e) {
   return operand;
 }
 
+mlir::Value HIRBuilder::emitWasmThreadSpawn(mlir::Location loc,
+                                            mlir::Value wrapperAddr,
+                                            mlir::Value threadArg,
+                                            mlir::Value tidAlloca) {
+  auto ptrType = getPtrType();
+  auto spawnFn =
+      module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_wasi_thread_spawn");
+  if (!spawnFn) {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto fnType =
+        mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, ptrType});
+    spawnFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+        loc, "__asc_wasi_thread_spawn", fnType);
+  }
+  auto handleVal = builder.create<mlir::LLVM::CallOp>(
+      loc, spawnFn, mlir::ValueRange{wrapperAddr, threadArg}).getResult();
+  // Reuse the caller's tidAlloca slot so task_join's uniform
+  // `load ptr, %handle` dispatch works unchanged across backends.
+  builder.create<mlir::LLVM::StoreOp>(loc, handleVal, tidAlloca);
+
+  if (!taskScopeHandleStack.empty())
+    taskScopeHandleStack.back().push_back(tidAlloca);
+
+  return tidAlloca;
+}
+
 mlir::Value HIRBuilder::emitSpawnClosure(ClosureExpr *cl,
                                          mlir::Location location) {
   auto ptrType = getPtrType();
@@ -3863,31 +3890,8 @@ mlir::Value HIRBuilder::emitSpawnClosure(ClosureExpr *cl,
         builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
   }
 
-  if (isWasmTarget()) {
-    // Wasm: call __asc_wasi_thread_spawn(wrapper, env) and store the
-    // returned asc_wasi_task* handle into tidAlloca so task_join's
-    // uniform `load ptr, %handle` dispatch works unchanged.
-    auto spawnFn =
-        module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(
-            "__asc_wasi_thread_spawn");
-    if (!spawnFn) {
-      mlir::OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPointToStart(module.getBody());
-      auto fnType = mlir::LLVM::LLVMFunctionType::get(
-          ptrType, {ptrType, ptrType});
-      spawnFn = builder.create<mlir::LLVM::LLVMFuncOp>(
-          location, "__asc_wasi_thread_spawn", fnType);
-    }
-    auto handleVal = builder.create<mlir::LLVM::CallOp>(
-        location, spawnFn,
-        mlir::ValueRange{wrapperAddr, threadArg}).getResult();
-    builder.create<mlir::LLVM::StoreOp>(location, handleVal, tidAlloca);
-
-    if (!taskScopeHandleStack.empty())
-      taskScopeHandleStack.back().push_back(tidAlloca);
-
-    return tidAlloca;
-  }
+  if (isWasmTarget())
+    return emitWasmThreadSpawn(location, wrapperAddr, threadArg, tidAlloca);
 
   auto nullAttr =
       builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
@@ -5134,31 +5138,8 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         if (!threadArg)
           threadArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
 
-        // Wasm target: call __asc_wasi_thread_spawn(wrapper, env). The
-        // returned handle is an asc_wasi_task*; store it in tidAlloca so
-        // task_join's `load ptr, %handle` dispatch pattern works uniformly
-        // across backends (see Task 6 in RFC-0007 Phase 2).
-        if (isWasmTarget()) {
-          auto spawnFn =
-              module.lookupSymbol<mlir::LLVM::LLVMFuncOp>(
-                  "__asc_wasi_thread_spawn");
-          if (!spawnFn) {
-            mlir::OpBuilder::InsertionGuard guard(builder);
-            builder.setInsertionPointToStart(module.getBody());
-            auto fnType = mlir::LLVM::LLVMFunctionType::get(
-                ptrType, {ptrType, ptrType});
-            spawnFn = builder.create<mlir::LLVM::LLVMFuncOp>(
-                location, "__asc_wasi_thread_spawn", fnType);
-          }
-          auto handleVal = builder.create<mlir::LLVM::CallOp>(
-              location, spawnFn,
-              mlir::ValueRange{wrapperAddr, threadArg}).getResult();
-          builder.create<mlir::LLVM::StoreOp>(location, handleVal, tidAlloca);
-
-          if (!taskScopeHandleStack.empty())
-            taskScopeHandleStack.back().push_back(tidAlloca);
-          return tidAlloca;
-        }
+        if (isWasmTarget())
+          return emitWasmThreadSpawn(location, wrapperAddr, threadArg, tidAlloca);
 
         auto nullAttr = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
 
