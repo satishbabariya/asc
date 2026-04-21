@@ -11,7 +11,13 @@ extern unsigned char __heap_base;
 static unsigned char *__asc_heap_ptr = &__heap_base;
 
 void *malloc(unsigned long size) {
-  // Align to 8 bytes.
+  // Align both the base pointer and size to 8 bytes. The base alignment
+  // matters because wasm-threads builds do atomic wait/notify on fields
+  // inside these allocations, which require 4-byte-aligned addresses;
+  // keeping the allocator at 8-byte alignment is the safe superset.
+  unsigned long base = (unsigned long)__asc_heap_ptr;
+  base = (base + 7u) & ~7ul;
+  __asc_heap_ptr = (unsigned char *)base;
   size = (size + 7u) & ~7u;
   void *ptr = __asc_heap_ptr;
   __asc_heap_ptr += size;

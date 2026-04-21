@@ -14,9 +14,14 @@ extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 
 struct asc_wasi_task {
-    int32_t tid;
+    // Explicit 8-byte alignment ensures done_flag (offset 4) is 4-byte
+    // aligned — required by memory.atomic.wait32 on wasm32-threads.
+    int32_t tid __attribute__((aligned(8)));
     int32_t done_flag;
-    void (*entry)(void *);
+    // Matches the HIRBuilder-synthesized wrapper signature `ptr(ptr)` so
+    // call_indirect in wasi_thread_start type-checks on wasm32. The return
+    // value is ignored (see wasi_thread_start below).
+    void *(*entry)(void *);
     void *arg;
 };
 
@@ -27,12 +32,12 @@ __attribute__((export_name("wasi_thread_start")))
 void wasi_thread_start(int32_t tid, void *start_arg) {
     struct asc_wasi_task *h = (struct asc_wasi_task *)start_arg;
     h->tid = tid;
-    h->entry(h->arg);
+    (void)h->entry(h->arg);
     __atomic_store_n(&h->done_flag, 1, __ATOMIC_RELEASE);
     __builtin_wasm_memory_atomic_notify(&h->done_flag, 1);
 }
 
-struct asc_wasi_task *__asc_wasi_thread_spawn(void (*entry)(void *), void *arg) {
+struct asc_wasi_task *__asc_wasi_thread_spawn(void *(*entry)(void *), void *arg) {
     struct asc_wasi_task *h =
         (struct asc_wasi_task *)malloc(sizeof(struct asc_wasi_task));
     if (!h) __builtin_trap();
@@ -46,8 +51,12 @@ struct asc_wasi_task *__asc_wasi_thread_spawn(void (*entry)(void *), void *arg) 
 }
 
 void __asc_wasi_thread_join(struct asc_wasi_task *h) {
-    while (__atomic_load_n(&h->done_flag, __ATOMIC_ACQUIRE) == 0) {
-        __builtin_wasm_memory_atomic_wait32(&h->done_flag, 0, -1);
+    // Spin via volatile read. memory.atomic.wait32 trips an alignment
+    // check in wasmtime on some struct layouts even when the effective
+    // address is 4-byte aligned, so use a plain volatile load for now.
+    volatile int32_t *done = (volatile int32_t *)&h->done_flag;
+    while (*done == 0) {
+        // busy-spin
     }
     free(h);
 }
@@ -61,7 +70,9 @@ void __asc_wasi_thread_join(struct asc_wasi_task *h) {
 struct asc_wasi_task {
     int32_t tid;
     int32_t done_flag;
-    void (*entry)(void *);
+    // Matches the HIRBuilder-synthesized wrapper signature `ptr(ptr)` so
+    // wasm call_indirect type-checks; return value ignored on both paths.
+    void *(*entry)(void *);
     void *arg;
 };
 
@@ -72,12 +83,12 @@ struct asc_wasi_task_host {
 
 static void *__asc_wasi_thread_trampoline(void *p) {
     struct asc_wasi_task *h = (struct asc_wasi_task *)p;
-    h->entry(h->arg);
+    (void)h->entry(h->arg);
     __atomic_store_n(&h->done_flag, 1, __ATOMIC_RELEASE);
     return NULL;
 }
 
-struct asc_wasi_task *__asc_wasi_thread_spawn(void (*entry)(void *), void *arg) {
+struct asc_wasi_task *__asc_wasi_thread_spawn(void *(*entry)(void *), void *arg) {
     struct asc_wasi_task_host *h =
         (struct asc_wasi_task_host *)malloc(sizeof(*h));
     if (!h) return NULL;

@@ -1133,6 +1133,7 @@ ExitCode Driver::linkWasm(const std::string &objFile,
   if (clangPath) {
     llvm::SmallVector<std::string, 4> runtimeSources;
     runtimeSources.push_back("lib/Runtime/runtime.c");
+    runtimeSources.push_back("lib/Runtime/wasi_io.c");
     if (threadsEnabled) {
       runtimeSources.push_back("lib/Runtime/wasi_thread_rt.c");
       runtimeSources.push_back("lib/Runtime/atomics.c");
@@ -1217,6 +1218,9 @@ ExitCode Driver::linkWasm(const std::string &objFile,
   if (threadsEnabled) {
     args.push_back("--shared-memory");
     args.push_back("--import-memory");
+    // Also re-export memory so WASI host functions (fd_write etc.) and
+    // other inspection tooling can find it under the standard name.
+    args.push_back("--export-memory");
     args.push_back("--max-memory=67108864"); // 64 MiB default
     args.push_back("--export=wasi_thread_start");
     args.push_back("--no-check-features");
