@@ -184,10 +184,8 @@ private:
                                   mlir::Value threadArg,
                                   mlir::Value tidAlloca);
 
-  /// Emit the Wasm-target `__asc_wasi_thread_join(handle)` call. `handleAlloca`
-  /// is the caller-side alloca slot that task_spawn stored the
-  /// `asc_wasi_task*` into; this helper loads the handle and dispatches to the
-  /// wasi-threads runtime helper (see RFC-0007 Phase 2 Task 6).
+  /// Mirror of `emitWasmThreadSpawn`: keeps task_join's backend-agnostic
+  /// `load ptr, %handle` shape intact on wasm (see RFC-0007 Phase 2 Task 6).
   void emitWasmThreadJoin(mlir::Location loc, mlir::Value handleAlloca);
 
   // ---- State ----

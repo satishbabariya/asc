@@ -5178,10 +5178,7 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
     return builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
   }
 
-  // Task join: pthread_join(handle) on native, __asc_wasi_thread_join on wasm.
-  // The handle from task_spawn is a pointer to the pthread_t / asc_wasi_task*
-  // (an alloca). We must load the actual handle value before passing to the
-  // join runtime (see RFC-0007 Phase 2 Task 6).
+  // Dispatch: wasi-threads runtime on wasm, pthread_join on native.
   if (name == "task_join") {
     if (!e->getArgs().empty()) {
       mlir::Value handle = visitExpr(e->getArgs()[0]);
@@ -5258,7 +5255,7 @@ mlir::Value HIRBuilder::visitTaskScopeExpr(TaskScopeExpr *e) {
       auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
       for (mlir::Value handle : handles) {
         // Load the pthread_t from the handle alloca, then join.
-        auto tid = builder.create<mlir::LLVM::LoadOp>(location, getPtrType(), handle);
+        auto tid = builder.create<mlir::LLVM::LoadOp>(location, ptrType, handle);
         builder.create<mlir::LLVM::CallOp>(location, pthreadJoinFn,
             mlir::ValueRange{tid, nullArg});
       }
