@@ -1148,6 +1148,13 @@ ExitCode Driver::linkWasm(const std::string &objFile,
         }
       }
       if (resolved.empty()) {
+        if (threadsEnabled) {
+          llvm::errs() << "error: runtime source required for threads build "
+                       << "not found: " << src << "\n";
+          for (const auto &o : runtimeObjs)
+            std::remove(o.c_str());
+          return ExitCode::SystemError;
+        }
         if (opts.verbose)
           llvm::errs() << "  [warn] runtime source not found: " << src << "\n";
         continue;
@@ -1176,6 +1183,13 @@ ExitCode Driver::linkWasm(const std::string &objFile,
           *clangPath, cargs, std::nullopt, {}, 60, 0, &cerr);
       if (crc == 0) {
         runtimeObjs.push_back(obj);
+      } else if (threadsEnabled) {
+        llvm::errs()
+            << "error: failed to compile runtime source for threads build: "
+            << resolved << ": " << cerr << "\n";
+        for (const auto &o : runtimeObjs)
+          std::remove(o.c_str());
+        return ExitCode::SystemError;
       } else if (opts.verbose) {
         llvm::errs() << "  [warn] failed to compile " << resolved << ": "
                      << cerr << "\n";
