@@ -4,4 +4,5 @@
 // CHECK-SAME: --import-memory
 // CHECK-SAME: --max-memory=
 // CHECK-SAME: --export=wasi_thread_start
+// CHECK-SAME: --no-check-features
 function main(): i32 { return 0; }
