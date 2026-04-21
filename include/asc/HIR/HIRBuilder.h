@@ -20,7 +20,9 @@
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/TargetParser/Triple.h"
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace asc {
@@ -40,6 +42,18 @@ class HIRBuilder : public ASTVisitor<HIRBuilder, mlir::Value> {
 public:
   HIRBuilder(mlir::MLIRContext &mlirCtx, ASTContext &astCtx, Sema &sema,
              const SourceManager &sm);
+
+  /// Record the target triple for downstream HIR emission so task.spawn /
+  /// task.join can branch between the native pthread path and the
+  /// wasi-threads path. Safe to leave unset: an empty Triple yields
+  /// UnknownArch and isWasmTarget() returns false.
+  void setTargetTriple(llvm::Triple t) { targetTriple = std::move(t); }
+
+  /// True when the recorded triple targets wasm32 or wasm64.
+  bool isWasmTarget() const {
+    return targetTriple.getArch() == llvm::Triple::wasm32 ||
+           targetTriple.getArch() == llvm::Triple::wasm64;
+  }
 
   /// Build an MLIR module from top-level declarations.
   mlir::OwningOpRef<mlir::ModuleOp>
@@ -109,6 +123,10 @@ public:
   mlir::Value visitTaskScopeExpr(TaskScopeExpr *e);
 
 private:
+  /// Target triple for this lowering. Defaults to empty (UnknownArch);
+  /// Driver calls setTargetTriple() after construction.
+  llvm::Triple targetTriple;
+
   /// Convert an AST Type to an MLIR Type.
   mlir::Type convertType(asc::Type *astType);
 

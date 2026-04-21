@@ -1048,6 +1048,7 @@ ExitCode Driver::lowerToHIR() {
 
   HIRBuilder hirBuilder(mlirState->context, *astCtx, *semaInstance,
                         sourceManager);
+  hirBuilder.setTargetTriple(llvm::Triple(opts.targetTriple));
   mlirState->module = hirBuilder.buildModule(topLevelDecls);
 
   if (!mlirState->module) {
