@@ -51,12 +51,12 @@ struct asc_wasi_task *__asc_wasi_thread_spawn(void *(*entry)(void *), void *arg)
 }
 
 void __asc_wasi_thread_join(struct asc_wasi_task *h) {
-    // Spin via volatile read. memory.atomic.wait32 trips an alignment
-    // check in wasmtime on some struct layouts even when the effective
-    // address is 4-byte aligned, so use a plain volatile load for now.
+    // TODO(RFC-0007 Phase 5): restore memory.atomic.wait32 once the wasmtime
+    // unaligned-atomic trap is resolved. Current busy-spin keeps correctness
+    // but burns a core on long joins — tracked as a Known Gap in CLAUDE.md.
     volatile int32_t *done = (volatile int32_t *)&h->done_flag;
     while (*done == 0) {
-        // busy-spin
+        // busy-spin; a yield via wasi-threads sched primitives is a follow-up.
     }
     free(h);
 }
