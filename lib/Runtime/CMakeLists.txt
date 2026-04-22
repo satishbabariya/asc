@@ -17,7 +17,9 @@ if(CMAKE_C_COMPILER)
     vec_rt.c
     arc_rt.c
     rc_rt.c
+    wasi_thread_rt.c
   )
+  target_include_directories(ascRuntime PRIVATE ${CMAKE_SOURCE_DIR}/include)
   target_compile_options(ascRuntime PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
   # For Wasm cross-compilation (when clang with wasm target is available):

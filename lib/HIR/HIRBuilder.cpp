@@ -3677,6 +3677,52 @@ mlir::Value HIRBuilder::visitCastExpr(CastExpr *e) {
   return operand;
 }
 
+mlir::Value HIRBuilder::emitWasmThreadSpawn(mlir::Location loc,
+                                            mlir::Value wrapperAddr,
+                                            mlir::Value threadArg,
+                                            mlir::Value tidAlloca) {
+  auto ptrType = getPtrType();
+  auto spawnFn =
+      module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_wasi_thread_spawn");
+  if (!spawnFn) {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto fnType =
+        mlir::LLVM::LLVMFunctionType::get(ptrType, {ptrType, ptrType});
+    spawnFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+        loc, "__asc_wasi_thread_spawn", fnType);
+  }
+  auto handleVal = builder.create<mlir::LLVM::CallOp>(
+      loc, spawnFn, mlir::ValueRange{wrapperAddr, threadArg}).getResult();
+  // Reuse the caller's tidAlloca slot so task_join's uniform
+  // `load ptr, %handle` dispatch works unchanged across backends.
+  builder.create<mlir::LLVM::StoreOp>(loc, handleVal, tidAlloca);
+
+  if (!taskScopeHandleStack.empty())
+    taskScopeHandleStack.back().push_back(tidAlloca);
+
+  return tidAlloca;
+}
+
+void HIRBuilder::emitWasmThreadJoin(mlir::Location loc,
+                                    mlir::Value handleAlloca) {
+  auto ptrType = getPtrType();
+  auto joinFn =
+      module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("__asc_wasi_thread_join");
+  if (!joinFn) {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto voidTy = mlir::LLVM::LLVMVoidType::get(builder.getContext());
+    auto fnType = mlir::LLVM::LLVMFunctionType::get(voidTy, {ptrType});
+    joinFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+        loc, "__asc_wasi_thread_join", fnType);
+  }
+  // Load the asc_wasi_task* handle from the caller-side alloca slot so the
+  // uniform `load ptr, %handle` dispatch matches the native pthread_join path.
+  auto hVal = builder.create<mlir::LLVM::LoadOp>(loc, ptrType, handleAlloca);
+  builder.create<mlir::LLVM::CallOp>(loc, joinFn, mlir::ValueRange{hVal});
+}
+
 mlir::Value HIRBuilder::emitSpawnClosure(ClosureExpr *cl,
                                          mlir::Location location) {
   auto ptrType = getPtrType();
@@ -3802,16 +3848,20 @@ mlir::Value HIRBuilder::emitSpawnClosure(ClosureExpr *cl,
   }
 
   // 5. Declare pthread_create, alloca pthread_t, malloc env, pack
-  //    captures, call pthread_create.
-  auto pthreadCreateFn =
-      module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_create");
-  if (!pthreadCreateFn) {
-    mlir::OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(module.getBody());
-    auto fnType = mlir::LLVM::LLVMFunctionType::get(
-        i32Type, {ptrType, ptrType, ptrType, ptrType});
-    pthreadCreateFn = builder.create<mlir::LLVM::LLVMFuncOp>(
-        location, "pthread_create", fnType);
+  //    captures, call pthread_create. Skip the native declare on wasm;
+  //    the wasm path below uses __asc_wasi_thread_spawn instead.
+  mlir::LLVM::LLVMFuncOp pthreadCreateFn;
+  if (!isWasmTarget()) {
+    pthreadCreateFn =
+        module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_create");
+    if (!pthreadCreateFn) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToStart(module.getBody());
+      auto fnType = mlir::LLVM::LLVMFunctionType::get(
+          i32Type, {ptrType, ptrType, ptrType, ptrType});
+      pthreadCreateFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+          location, "pthread_create", fnType);
+    }
   }
 
   auto i64One = builder.create<mlir::LLVM::ConstantOp>(
@@ -3858,6 +3908,9 @@ mlir::Value HIRBuilder::emitSpawnClosure(ClosureExpr *cl,
     threadArg =
         builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
   }
+
+  if (isWasiThreadsTarget())
+    return emitWasmThreadSpawn(location, wrapperAddr, threadArg, tidAlloca);
 
   auto nullAttr =
       builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
@@ -5001,15 +5054,20 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         builder.create<mlir::LLVM::ReturnOp>(location, mlir::ValueRange{null});
         builder.restoreInsertionPoint(savedIP);
 
-        // Declare pthread_create: i32 (ptr, ptr, ptr, ptr)
-        auto pthreadCreateFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_create");
-        if (!pthreadCreateFn) {
-          mlir::OpBuilder::InsertionGuard guard(builder);
-          builder.setInsertionPointToStart(module.getBody());
-          auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type,
-              {ptrType, ptrType, ptrType, ptrType});
-          pthreadCreateFn = builder.create<mlir::LLVM::LLVMFuncOp>(
-              location, "pthread_create", fnType);
+        // Declare pthread_create: i32 (ptr, ptr, ptr, ptr). On wasm we
+        // use __asc_wasi_thread_spawn instead (declared below), so skip
+        // the native declaration to keep the emitted module clean.
+        mlir::LLVM::LLVMFuncOp pthreadCreateFn;
+        if (!isWasmTarget()) {
+          pthreadCreateFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_create");
+          if (!pthreadCreateFn) {
+            mlir::OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(module.getBody());
+            auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type,
+                {ptrType, ptrType, ptrType, ptrType});
+            pthreadCreateFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+                location, "pthread_create", fnType);
+          }
         }
 
         // Alloca for pthread_t.
@@ -5099,6 +5157,9 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         if (!threadArg)
           threadArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
 
+        if (isWasiThreadsTarget())
+          return emitWasmThreadSpawn(location, wrapperAddr, threadArg, tidAlloca);
+
         auto nullAttr = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
 
         // pthread_create(&tid, NULL, wrapper, threadArg)
@@ -5117,13 +5178,30 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
     return builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
   }
 
-  // Task join: pthread_join(handle).
-  // The handle from task_spawn is a pointer to the pthread_t (an alloca).
-  // We must load the actual pthread_t value before passing to pthread_join.
+  // Dispatch: wasi-threads runtime on wasm, pthread_join on native.
   if (name == "task_join") {
     if (!e->getArgs().empty()) {
       mlir::Value handle = visitExpr(e->getArgs()[0]);
       if (handle && mlir::isa<mlir::LLVM::LLVMPointerType>(handle.getType())) {
+        // Dedup: remove this handle from the current scope's auto-join list
+        // so visitTaskScopeExpr does not emit a second join on it (which
+        // would be pthread_join UB on native and double-free on wasm via
+        // __asc_wasi_thread_join). Handle aliasing through let-bindings is
+        // not tracked here — the erase is a best-effort value match that
+        // covers the direct `task.join(task.spawn(...))` / tidAlloca-in-scope
+        // case. TODO(RFC-0007): chase through SSA aliases once joins get
+        // formalised in the dialect.
+        if (!taskScopeHandleStack.empty()) {
+          auto &scope = taskScopeHandleStack.back();
+          scope.erase(std::remove(scope.begin(), scope.end(), handle),
+                      scope.end());
+        }
+
+        if (isWasiThreadsTarget()) {
+          emitWasmThreadJoin(location, handle);
+          return {};
+        }
+
         auto ptrType = getPtrType();
         auto i32Type = builder.getIntegerType(32);
 
@@ -5165,29 +5243,36 @@ mlir::Value HIRBuilder::visitTaskScopeExpr(TaskScopeExpr *e) {
   // Execute the body — task.spawn calls within will push handles.
   mlir::Value result = visitCompoundStmt(e->getBody());
 
-  // Pop the handle list and emit pthread_join for each collected handle.
+  // Pop the handle list and emit a join for each collected handle. On wasm
+  // targets we dispatch to __asc_wasi_thread_join via the shared helper;
+  // native targets keep the pthread_join path.
   auto handles = std::move(taskScopeHandleStack.back());
   taskScopeHandleStack.pop_back();
 
   if (!handles.empty()) {
-    auto ptrType = getPtrType();
-    auto i32Type = builder.getIntegerType(32);
+    if (isWasiThreadsTarget()) {
+      for (mlir::Value handle : handles)
+        emitWasmThreadJoin(location, handle);
+    } else {
+      auto ptrType = getPtrType();
+      auto i32Type = builder.getIntegerType(32);
 
-    auto pthreadJoinFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_join");
-    if (!pthreadJoinFn) {
-      mlir::OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPointToStart(module.getBody());
-      auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType});
-      pthreadJoinFn = builder.create<mlir::LLVM::LLVMFuncOp>(
-          location, "pthread_join", fnType);
-    }
+      auto pthreadJoinFn = module.lookupSymbol<mlir::LLVM::LLVMFuncOp>("pthread_join");
+      if (!pthreadJoinFn) {
+        mlir::OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(module.getBody());
+        auto fnType = mlir::LLVM::LLVMFunctionType::get(i32Type, {ptrType, ptrType});
+        pthreadJoinFn = builder.create<mlir::LLVM::LLVMFuncOp>(
+            location, "pthread_join", fnType);
+      }
 
-    auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
-    for (mlir::Value handle : handles) {
-      // Load the pthread_t from the handle alloca, then join.
-      auto tid = builder.create<mlir::LLVM::LoadOp>(location, ptrType, handle);
-      builder.create<mlir::LLVM::CallOp>(location, pthreadJoinFn,
-          mlir::ValueRange{tid, nullArg});
+      auto nullArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
+      for (mlir::Value handle : handles) {
+        // Load the pthread_t from the handle alloca, then join.
+        auto tid = builder.create<mlir::LLVM::LoadOp>(location, ptrType, handle);
+        builder.create<mlir::LLVM::CallOp>(location, pthreadJoinFn,
+            mlir::ValueRange{tid, nullArg});
+      }
     }
   }
 

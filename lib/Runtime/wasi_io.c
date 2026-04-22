@@ -26,6 +26,15 @@ void __asc_eprint(const char *ptr, unsigned int len) {
   __imported_wasi_snapshot_preview1_fd_write(2, &iov, 1, &nwritten);
 }
 
+void __asc_println(const char *ptr, unsigned int len) {
+  __wasi_ciovec_t iov = {ptr, len};
+  unsigned int nwritten;
+  __imported_wasi_snapshot_preview1_fd_write(1, &iov, 1, &nwritten);
+  static const char nl = '\n';
+  __wasi_ciovec_t nl_iov = {&nl, 1};
+  __imported_wasi_snapshot_preview1_fd_write(1, &nl_iov, 1, &nwritten);
+}
+
 #else
 
 // Native: use write() syscall.

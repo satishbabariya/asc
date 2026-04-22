@@ -98,6 +98,7 @@ Key MLIR types: `!own.val<T, send, sync>` (owned), `!own.borrow<T>` (shared), `!
 - `AtomicU64` with load, store, swap, compare_exchange, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor
 - `AtomicUsize` with load, store, swap, compare_exchange, fetch_add, fetch_sub, fetch_and, fetch_or, fetch_xor
 - `AtomicPtr<T>` with load, store, swap, compare_exchange, compare_exchange_weak (T phantom for pointer-type tagging)
+- **Wasm threads**: `task.spawn` + `task.join` run on `wasm32-wasi-threads` under `wasmtime run -W threads=y -W shared-memory=y -S threads=y` (e2e test `task_spawn_wasm_run.ts` passing).
 
 ### Standard Library
 - **Vec\<T\>**: new, push, pop, get, len, is_empty, clear, truncate, iter, fold, map, filter, sort, reverse, dedup, extend, with_capacity, retain (18 methods)
@@ -160,7 +161,7 @@ defers to user-defined `Type_clone` when one exists.
 | 0004 | Target Support | **~86%** |
 | 0005 | Ownership Model | **~88%** |
 | 0006 | Borrow Checker | **~83%** |
-| 0007 | Concurrency | **~58%** |
+| 0007 | Concurrency | **~70%** |
 | 0008 | Memory Model | **~68%** |
 | 0009 | Panic/Unwind | **~65%** |
 | 0010 | Toolchain/DX | **~80%** |
@@ -179,17 +180,18 @@ defers to user-defined `Type_clone` when one exists.
 
 ## Known Gaps
 
-1. **Closure literals in task.spawn** — supported. Sema collects free variables from the closure body and validates each capture's type against the Send marker (`Rc`/`Weak` rejected); HIRBuilder lifts the body to a synthesized `__spawn_closure_N` func and reuses the env-struct packing path shared with the named-function form. `thread::scope` with lifetime-bounded borrows is still deferred to RFC-0007 Phase 6.
+1. **Closure literals in task.spawn** — supported on native AND wasm32-wasi-threads (Phase 2 complete). Sema collects free variables from the closure body and validates each capture's type against the Send marker (`Rc`/`Weak` rejected); HIRBuilder lifts the body to a synthesized `__spawn_closure_N` func and reuses the env-struct packing path shared with the named-function form. On wasm the spawn lowers to `__asc_wasi_thread_spawn` / `__asc_wasi_thread_join` (see `lib/Runtime/wasi_thread_rt.c`); `thread::scope` with lifetime-bounded borrows is still deferred to RFC-0007 Phase 6.
 2. **Drop flags for conditional moves** — MaybeMoved warns but no runtime flag
 3. **Wasm EH** — uses setjmp/longjmp, not Wasm exception handling proposal. catch_unwind available on native targets.
 4. **MPMC channels** — only SPSC ring buffer
-5. **Constant folding** — uses arith.constant at HIR, no Flang-style ConstantExpr
-6. **Multi-module linking** — import/export parses but no cross-module IR resolution
-7. **RFC-0016 JSON** — derive(Serialize/Deserialize) requires unimplemented macro expansion
-8. **RFC-0020 Async** — async/await syntax not supported in compiler (RFC-0015 §21)
-9. **Scoped threads** — thread::scope API not implemented
-10. **Unresolved-symbol permissiveness** — mostly closed. Unknown instance methods, static methods, and enum variants on types with registered decls now error with dedicated messages (`no method`, `no static method`, `no variant`). Still permissive: unknown type names surface as a misleading "type mismatch" rather than a dedicated unknown-type error.
-11. **SHA-3 runtime correctness unverified** — Keccak-f[1600] sponge implemented in std/crypto/sha3.ts and compiles cleanly into 290/290 lit tests; NIST test-vector verification awaits an execution-capable test harness.
+5. **Wasm task.join busy-spins on done_flag** — wasmtime 43 traps `memory.atomic.wait32` on our 4-byte-aligned flag, so `__asc_wasi_thread_join` uses a volatile spin. Correctness preserved, CPU wasted on long joins. Tracked as Phase 5 follow-up.
+6. **Constant folding** — uses arith.constant at HIR, no Flang-style ConstantExpr
+7. **Multi-module linking** — import/export parses but no cross-module IR resolution
+8. **RFC-0016 JSON** — derive(Serialize/Deserialize) requires unimplemented macro expansion
+9. **RFC-0020 Async** — async/await syntax not supported in compiler (RFC-0015 §21)
+10. **Scoped threads** — thread::scope API not implemented
+11. **Unresolved-symbol permissiveness** — mostly closed. Unknown instance methods, static methods, and enum variants on types with registered decls now error with dedicated messages (`no method`, `no static method`, `no variant`). Still permissive: unknown type names surface as a misleading "type mismatch" rather than a dedicated unknown-type error.
+12. **SHA-3 runtime correctness unverified** — Keccak-f[1600] sponge implemented in std/crypto/sha3.ts and compiles cleanly into 290/290 lit tests; NIST test-vector verification awaits an execution-capable test harness.
 
 ## Testing
 

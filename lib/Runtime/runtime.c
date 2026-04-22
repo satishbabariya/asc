@@ -11,11 +11,35 @@ extern unsigned char __heap_base;
 static unsigned char *__asc_heap_ptr = &__heap_base;
 
 void *malloc(unsigned long size) {
-  // Align to 8 bytes.
-  size = (size + 7u) & ~7u;
+  // 8-byte alignment for the returned pointer; wasm-threads builds rely on
+  // 4-byte-aligned atomic wait/notify fields inside these allocations.
+  size = (size + 7u) & ~7ul;
+
+#if defined(ASC_WASM_THREADS)
+  // Lock-free bump allocator: CAS loop on __asc_heap_ptr so concurrent
+  // mallocs can't produce overlapping regions. Each iteration computes the
+  // aligned start, proposed end, and commits atomically.
+  unsigned long old =
+      __atomic_load_n((unsigned long *)&__asc_heap_ptr, __ATOMIC_RELAXED);
+  unsigned long aligned;
+  unsigned long new_val;
+  do {
+    aligned = (old + 7u) & ~7ul;
+    new_val = aligned + size;
+  } while (!__atomic_compare_exchange_n((unsigned long *)&__asc_heap_ptr,
+                                         &old, new_val,
+                                         /*weak=*/1,
+                                         __ATOMIC_ACQ_REL,
+                                         __ATOMIC_RELAXED));
+  return (void *)aligned;
+#else
+  unsigned long base = (unsigned long)__asc_heap_ptr;
+  base = (base + 7u) & ~7ul;
+  __asc_heap_ptr = (unsigned char *)base;
   void *ptr = __asc_heap_ptr;
   __asc_heap_ptr += size;
   return ptr;
+#endif
 }
 
 void free(void *ptr) {
