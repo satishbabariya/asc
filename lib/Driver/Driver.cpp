@@ -1171,6 +1171,8 @@ ExitCode Driver::linkWasm(const std::string &objFile,
         cargs.push_back("-pthread");
         cargs.push_back("-matomics");
         cargs.push_back("-mbulk-memory");
+        // Opts runtime.c into its atomic-CAS bump allocator path.
+        cargs.push_back("-DASC_WASM_THREADS=1");
       }
       cargs.push_back("-c");
       cargs.push_back(resolved);
