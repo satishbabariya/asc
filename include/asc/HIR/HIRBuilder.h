@@ -49,10 +49,21 @@ public:
   /// UnknownArch and isWasmTarget() returns false.
   void setTargetTriple(llvm::Triple t) { targetTriple = std::move(t); }
 
-  /// True when the recorded triple targets wasm32 or wasm64.
+  /// True when the recorded triple targets wasm32 or wasm64 (any flavor).
+  /// Use this for target gating that applies to *all* wasm variants (e.g.
+  /// skipping pthread declarations).
   bool isWasmTarget() const {
     return targetTriple.getArch() == llvm::Triple::wasm32 ||
            targetTriple.getArch() == llvm::Triple::wasm64;
+  }
+
+  /// True only when the triple signals WASI threads (`wasm32-wasi-threads`).
+  /// Use this when emitting wasi-threads runtime calls (__asc_wasi_thread_*)
+  /// — those symbols are linked in only on the threaded flavor.
+  bool isWasiThreadsTarget() const {
+    return isWasmTarget() &&
+           (targetTriple.getEnvironmentName().contains("threads") ||
+            targetTriple.getOSName().contains("threads"));
   }
 
   /// Build an MLIR module from top-level declarations.

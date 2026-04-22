@@ -3909,7 +3909,7 @@ mlir::Value HIRBuilder::emitSpawnClosure(ClosureExpr *cl,
         builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
   }
 
-  if (isWasmTarget())
+  if (isWasiThreadsTarget())
     return emitWasmThreadSpawn(location, wrapperAddr, threadArg, tidAlloca);
 
   auto nullAttr =
@@ -5157,7 +5157,7 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
         if (!threadArg)
           threadArg = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
 
-        if (isWasmTarget())
+        if (isWasiThreadsTarget())
           return emitWasmThreadSpawn(location, wrapperAddr, threadArg, tidAlloca);
 
         auto nullAttr = builder.create<mlir::LLVM::ZeroOp>(location, ptrType);
@@ -5183,7 +5183,21 @@ mlir::Value HIRBuilder::visitMacroCallExpr(MacroCallExpr *e) {
     if (!e->getArgs().empty()) {
       mlir::Value handle = visitExpr(e->getArgs()[0]);
       if (handle && mlir::isa<mlir::LLVM::LLVMPointerType>(handle.getType())) {
-        if (isWasmTarget()) {
+        // Dedup: remove this handle from the current scope's auto-join list
+        // so visitTaskScopeExpr does not emit a second join on it (which
+        // would be pthread_join UB on native and double-free on wasm via
+        // __asc_wasi_thread_join). Handle aliasing through let-bindings is
+        // not tracked here — the erase is a best-effort value match that
+        // covers the direct `task.join(task.spawn(...))` / tidAlloca-in-scope
+        // case. TODO(RFC-0007): chase through SSA aliases once joins get
+        // formalised in the dialect.
+        if (!taskScopeHandleStack.empty()) {
+          auto &scope = taskScopeHandleStack.back();
+          scope.erase(std::remove(scope.begin(), scope.end(), handle),
+                      scope.end());
+        }
+
+        if (isWasiThreadsTarget()) {
           emitWasmThreadJoin(location, handle);
           return {};
         }
@@ -5236,7 +5250,7 @@ mlir::Value HIRBuilder::visitTaskScopeExpr(TaskScopeExpr *e) {
   taskScopeHandleStack.pop_back();
 
   if (!handles.empty()) {
-    if (isWasmTarget()) {
+    if (isWasiThreadsTarget()) {
       for (mlir::Value handle : handles)
         emitWasmThreadJoin(location, handle);
     } else {
