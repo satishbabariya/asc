@@ -26,7 +26,7 @@ RFC-0007 §204-210 says `call $wasi_thread_start` is the import; that is the wro
 ## File Structure
 
 **Create:**
-- `lib/Runtime/wasi_thread_rt.c` — wasi-threads C runtime (spawn trampoline, exported start entry, join via atomic.wait32). Self-contained: no libc pthread dep.
+- `lib/Runtime/wasi_thread_rt.c` — wasi-threads C runtime (spawn trampoline, exported start entry, join via a volatile busy-spin on `done_flag`). A `memory.atomic.wait32`-based join is the intended long-term primitive, but wasmtime 43 traps "unaligned atomic" on 4-byte-aligned flags in practice; the proper wait/notify lowering is deferred to Phase 5. Self-contained: no libc pthread dep.
 - `include/asc/Runtime/wasi_thread_rt.h` — symbol declarations (also imported by the test driver for sanity).
 - `test/e2e/task_spawn_wasm_basic.ts` — compiles to `.wasm`, FileCheck-validates the expected imports/exports.
 - `test/e2e/task_spawn_wasm_run.ts` — if wasmtime is available and supports `--wasi threads=y`, execute and validate stdout.
@@ -147,10 +147,11 @@ asc_wasi_task *__asc_wasi_thread_spawn(void (*entry)(void *), void *arg) {
 }
 
 void __asc_wasi_thread_join(asc_wasi_task *h) {
-    while (__atomic_load_n(&h->done_flag, __ATOMIC_ACQUIRE) == 0) {
-        // Wait for done_flag to become != 0.
-        __builtin_wasm_memory_atomic_wait32(&h->done_flag, 0, -1);
-    }
+    // Phase 2: busy-spin on a volatile load. memory.atomic.wait32 traps
+    // "unaligned atomic" in wasmtime 43 even at 4-byte-aligned addresses;
+    // proper wait/notify is tracked for Phase 5.
+    volatile int32_t *done = (volatile int32_t *)&h->done_flag;
+    while (*done == 0) { /* busy-spin */ }
     free(h);
 }
 

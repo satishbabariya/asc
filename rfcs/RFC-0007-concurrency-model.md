@@ -218,8 +218,11 @@ closure, runs the task body, atomically flips `done_flag`, and calls
 
 ### Step 5 — Return handle
 
-The `!task.handle` is a struct `{ thread_id: i32, closure_ptr: i32 }` stored in the
-spawner's stack frame.
+The handle returned by `__asc_wasi_thread_spawn` is an `asc_wasi_task *` —
+a pointer to the allocated task struct (containing `tid`, `done_flag`,
+`entry`, `arg`). HIRBuilder stores that pointer into a caller-side alloca
+so `task.join(h)` can use the same `load ptr, %handle` dispatch on both
+the wasm and native (pthread) backends.
 
 ## `task.join` Lowering
 
