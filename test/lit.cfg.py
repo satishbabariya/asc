@@ -22,9 +22,11 @@ if os.path.isdir(_llvm_bin):
 # `-S threads=y` invocation used by task_spawn_wasm_run.ts. Environments
 # without a wasmtime (or with an older one) will skip that test cleanly via
 # the `REQUIRES: wasmtime-threads` directive.
-if shutil.which("wasmtime"):
+wasmtime_path = shutil.which("wasmtime")
+if wasmtime_path:
     try:
-        out = subprocess.check_output(["wasmtime", "--version"], text=True)
+        out = subprocess.check_output(
+            [wasmtime_path, "--version"], text=True, timeout=2)
         # e.g. "wasmtime 43.0.1 (cd4b6ed9b 2026-04-09)"
         parts = out.strip().split()
         if len(parts) >= 2:

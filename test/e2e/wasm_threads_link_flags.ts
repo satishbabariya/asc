@@ -2,6 +2,7 @@
 // CHECK: [link]
 // CHECK-SAME: --shared-memory
 // CHECK-SAME: --import-memory
+// CHECK-SAME: --export-memory
 // CHECK-SAME: --max-memory=
 // CHECK-SAME: --export=wasi_thread_start
 // CHECK-SAME: --no-check-features

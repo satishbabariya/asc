@@ -1,6 +1,4 @@
-// RUN: %asc build %s --target wasm32-wasi-threads --emit llvmir -o - | FileCheck %s
-// CHECK-NOT: call i32 @pthread_create
-// CHECK-NOT: call {{.*}} @pthread_join
+// RUN: %asc build %s --target wasm32-wasi-threads --emit llvmir -o - | FileCheck %s --implicit-check-not='call {{.*}} @pthread_create' --implicit-check-not='call {{.*}} @pthread_join'
 // CHECK-DAG: call {{.*}} @__asc_wasi_thread_spawn
 // CHECK-DAG: call void @__asc_wasi_thread_join
 function worker(): void {
